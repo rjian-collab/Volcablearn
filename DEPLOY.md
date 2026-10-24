@@ -45,6 +45,8 @@
 2. 名稱填 `volcablearn-db`，按「**Create**」。
 3. 進入這個資料庫 → 點「**Console**」。
 4. 打開本專案的 `worker/schema.sql`，**整段複製**貼到 Console → 按「**Execute**」。
+   如果出現「No SQL statements detected」，就改成**一行一行**貼上執行（共 6 行）。
+   各表用途：`words` 共有單字、`reports` 回報紀錄、`rejected` AI 拒絕的投稿、`quota` 每日使用次數。
 5. 點「**Tables**」，應該看到 `words`、`reports`、`rejected`、`quota` 四個表。
 
 ### 3. 建立 Worker
