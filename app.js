@@ -179,7 +179,7 @@ function makeQ(type,w){
     if(q.sub==="syn"){
       q.answers=w.syn.flatMap(alts);
       q.also=words().filter(x=>x.grp&&x.grp===w.grp&&x.w!==w.w).map(x=>x.w);
-      q.html=`<p><span class="pill">同義字</span></p><p class="q"><span class="b">${esc(w.w)}</span> <span class="mute">(${esc(w.pos)})</span> ${esc(w.m)}</p><p class="q">寫出一個 C1+ 同義字${pending(w)}</p>`+inputLine("→ ");
+      q.html=`<p><span class="pill">同義字</span></p><p class="q"><span class="b">${esc(w.w)}</span> <span class="mute">(${esc(w.pos)})</span> ${esc(w.m)}</p><p class="q">寫出一個同義字${pending(w)}</p>`+inputLine("→ ");
       q.after=`<p class="q">可接受：${w.syn.map(s=>esc(alts(s).join(" / "))).join("、")}</p>`;
     }else if(q.sub==="der"){
       const d=pick(w.der);q.answers=[d[0]];
@@ -733,9 +733,9 @@ async function callAI(prompt){
 }
 function buildPrompt(list){
   const topics=[...new Set(words().map(w=>w.topic))];
-  return `你是幫台灣學生製作雅思（IELTS）單字閃卡的助手。請為下列每個英文單字或片語各產生一筆資料，只輸出一個 JSON 陣列，不要輸出其他文字或 Markdown。
+  return `你是幫台灣學生製作英文單字閃卡的助手。請為下列每個英文單字或片語各產生一筆資料，只輸出一個 JSON 陣列，不要輸出其他文字或 Markdown。
 每筆格式：
-{"input":"使用者輸入的原字","w":"英文原形，小寫；片語保留空格；若明顯拼錯請改正","pos":"n、v、adj、adv、ph、prefix 其中之一","m":"繁體中文主要意思，以雅思寫作與圖表報告語境為主，12 字以內","alt":"其他常見意思（繁體中文），沒有就空字串","syn":["1 到 2 個 C1 以上程度的英文同義字"],"der":[["派生字","詞性","繁體中文"]],"col":[["常見搭配詞，目標字用大括號包起來並寫出實際詞形，例如 {exceed} expectations","繁體中文"]],"ex":"一句 C1 程度、雅思報告風格的英文例句，目標字只出現一次並用大括號包起來，寫出實際詞形，例如 House prices {soared} in 2021.","topic":"從這些主題選一個：${topics.join("、")}；都不適合就自訂 2 到 4 字的繁體中文主題","note":"如果輸入不是英文單字或可能拼錯，用繁體中文簡短說明；否則空字串"}
+{"input":"使用者輸入的原字","w":"英文原形，小寫；片語保留空格；若明顯拼錯請改正","pos":"n、v、adj、adv、ph、prefix 其中之一","m":"繁體中文主要意思，選最常用的意思，12 字以內","alt":"其他常見意思（繁體中文），沒有就空字串","syn":["1 到 2 個英文同義字，優先選比原字更進階的"],"der":[["派生字","詞性","繁體中文"]],"col":[["常見搭配詞，目標字用大括號包起來並寫出實際詞形，例如 {exceed} expectations","繁體中文"]],"ex":"一句自然、常見情境的英文例句，目標字只出現一次並用大括號包起來，寫出實際詞形，例如 House prices {soared} in 2021.","topic":"從這些主題選一個：${topics.join("、")}；都不適合就自訂 2 到 4 字的繁體中文主題","note":"如果輸入不是英文單字或可能拼錯，用繁體中文簡短說明；否則空字串"}
 der 最多 3 個，col 2 個。所有中文都用繁體中文。
 單字：
 ${list.map(x=>"- "+x).join("\n")}`;

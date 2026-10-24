@@ -1,7 +1,7 @@
 // 離線快取：同網站的檔案一律「先問網路（並向伺服器確認是否有新版）」，
 // 連不上網路時才用快取，所以更新後重新整理就會拿到新版。
 // AI 服務等外部網址不經過這裡。
-const CACHE = "volcablearn-ac4c7252";
+const CACHE = "volcablearn-85d78c0c";
 const FILES = ["./", "index.html", "style.css", "data.js", "app.js", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png"];
 
 self.addEventListener("install", e => {

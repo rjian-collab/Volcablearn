@@ -1,7 +1,7 @@
 {
   "name": "Volcablearn 單字閃卡",
   "short_name": "Volcablearn",
-  "description": "用遺忘曲線背雅思單字的閃卡 App",
+  "description": "用遺忘曲線背英文單字的閃卡網站",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
