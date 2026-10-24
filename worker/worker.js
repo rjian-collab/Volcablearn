@@ -65,7 +65,7 @@ export default {
         ai_model_in_use: (await metaGet(env, "ai_model")) || "（還沒成功審核過）",
         last_ai_error: (await metaGet(env, "ai_error")) || "（沒有）",
         placement: "（看 /api/diag 的 colo 欄位）",
-        version: "2026-10-24f",
+        version: "2026-10-24g",
       });
       else if (p === "/api/config") res = json({ google_client_id: String(env.GOOGLE_CLIENT_ID || "").trim() });
       else if (p === "/api/auth/google" && request.method === "POST") res = await authGoogle(request, env);
@@ -370,12 +370,13 @@ async function diag(request, env) {
   await useQuota(env, "diag:" + (await sha(ip + (env.ADMIN_TOKEN || ""))), 10);
   const p = 'Reply with exactly this JSON and nothing else: {"approve": true}';
   const results = [];
-  if (env.GEMINI_API_KEY) for (const model of aiModels(env, "").slice(0, 3)) {
+  const only = new URL(request.url).searchParams.get("m") || "";  // m=gemini 只測 Gemini；m=cf 只測 Cloudflare AI
+  if (env.GEMINI_API_KEY && only !== "cf") for (const model of aiModels(env, "").slice(0, only ? 1 : 3)) {
     const r = await geminiCall(model, p, env, 12000);
     results.push({ model, ok: r.ok && /approve/.test(r.text), status: r.status, seconds: +(r.ms / 1000).toFixed(1), error: r.error.slice(0, 120) });
     if (/location is not supported/i.test(r.error)) break;
   }
-  if (env.AI) for (const model of CF_MODELS) {
+  if (env.AI && only !== "gemini") for (const model of CF_MODELS.slice(0, only ? 2 : 4)) {
     const r = await cfCall(model, p, env, 15000);
     results.push({ model, ok: r.ok && /approve/.test(r.text), status: r.status, seconds: +(r.ms / 1000).toFixed(1), error: r.error.slice(0, 120) });
   }
