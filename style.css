@@ -165,5 +165,8 @@ button.xchip:hover{background:var(--pri-soft)}
 .stag.mine{background:var(--pri-soft);color:var(--pri)}.stag.ok{color:var(--green)}.stag.bad{color:var(--red)}
 .libempty{padding:20px 0;text-align:center}
 @media (max-width:560px){.lrow{grid-template-columns:1fr}.lact{grid-column:1;grid-row:auto;justify-content:flex-start}}
+details.admin{background:var(--card);border:1px solid var(--amber);border-radius:14px;padding:10px 16px;margin:8px 0 12px}
+details.admin>p button{border:1px solid var(--line);border-radius:9px;padding:3px 10px;font-size:13px;background:var(--card)}
+details.admin summary{cursor:pointer;font-weight:800;display:flex;gap:8px;align-items:center}
 .foot{position:fixed;left:0;right:0;bottom:0;background:var(--bg);color:var(--mute);font-size:12px;padding:6px max(16px,env(safe-area-inset-right,0px)) calc(6px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-left,0px));text-align:center}
 @media (max-width:560px){header{justify-content:center}.word{font-size:34px}.face{min-height:300px;padding:40px 18px 22px}.btn{min-width:0;flex:1;padding:12px 8px}.btn.wide{min-width:0;width:100%}.foot{display:none}nav button{padding:6px 10px}}

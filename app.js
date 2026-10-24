@@ -309,7 +309,7 @@ const QUIZ=["mix","spell","choose","extend","cloze","confuse"];
 const TITLE={mix:"綜合",spell:"填字",choose:"選意思",extend:"延伸詞彙",cloze:"例句挖空",confuse:"易混字",stats:"統計",review:"審核補充資料",settings:"設定"};
 let mode="cards",quizType="mix",cur=null,lastPick=null,msg="",resetArm=false,editing=null,reviewOnlyPending=false,focusAfter=null;
 let sess=null,toasts=[],extBusy=false,again=[],extra=null,lastNote="",delArm=null,addInput="",drafts=[],addBusy=false,addMsg="",addErr=false;
-function setMode(m){if(mode==="quiz"&&m!=="quiz"&&sess&&sess.finished)sess=null;mode=m;cur=null;msg="";editing=null;resetArm=false;render();}
+function setMode(m){if(mode==="quiz"&&m!=="quiz"&&sess&&sess.finished)sess=null;const changed=mode!==m;mode=m;cur=null;msg="";editing=null;resetArm=false;render();if(changed)try{window.scrollTo(0,0);}catch(e){}}
 function switchMode(d){setMode(MODES[(MODES.indexOf(mode)+d+MODES.length)%MODES.length]);}
 function switchQuiz(d){if(sess&&!sess.finished)return;quizType=QUIZ[(QUIZ.indexOf(quizType)+d+QUIZ.length)%QUIZ.length];sess=null;cur=null;render();}
 
@@ -802,7 +802,7 @@ function pSettings(){
   h+=keyGuide(ai.provider,!ai.key);
   }
   h+=`<h2>共有詞庫</h2><p class="q mute">${apiOn()?`已連上共有詞庫伺服器（${Object.keys(shared.words).length} 個社群單字）。`:CL()?"在 claude.ai 上開啟時無法使用共有詞庫。":"這個網站還沒設定共有詞庫伺服器（站長要在 config.js 填入網址）。"}</p>`;
-  if(apiOn())h+=`<p class="q">站長金鑰：<input data-nav id="admkey" type="password" class="wide" value="${esc(adminKey())}" placeholder="只有站長需要填" autocomplete="off"> <span class="mute">填了之後「詞庫 → 共有詞庫」會出現管理功能</span></p>`;
+  if(apiOn())h+=`<p class="q">站長金鑰：<input data-nav id="admkey" type="password" class="wide" value="${esc(adminKey())}" placeholder="只有站長需要填" autocomplete="off"> <button data-nav data-act="adm-verify">驗證並開啟站長管理</button> <span class="mute">填了之後「詞庫 → 共有詞庫」會出現管理功能</span></p>`;
   h+=`<h2>資料</h2><p class="q mute">${cloudState==="on"?"進度會自動同步到你的 Claude 帳號，換電腦打開這個網頁也看得到。":cloudState==="readonly"?"這個網頁目前不能幫你存到雲端，進度只存在這台裝置的瀏覽器，記得定期匯出備份。":"進度存在這台裝置的瀏覽器，換電腦或清除瀏覽資料會不見，記得定期匯出備份。"}</p>`;
   h+=`<p><button data-nav data-act="export">匯出 JSON</button>　<button data-nav data-act="import">匯入 JSON</button>　<button data-nav data-act="exportwords">匯出詞庫（含審核狀態）</button></p>`;
   h+=`<h2>資料來源</h2><p class="q mute">CEFR 單字等級：A1～B2 取自 CEFR-J Wordlist v1.5（Tono Laboratory, TUFS）；C1～C2 取自 Octanove Vocabulary Profile C1/C2 v1.0（Octanove Labs，CC BY-SA 4.0）。</p>`;
@@ -897,28 +897,31 @@ function pLibrary(){
   }else{
     h+=`<p class="mute">你自己新增的字，以及從共有詞庫收藏的字。${apiOn()?"新增的字會自動送去 AI 審核，通過後大家都能用。":""}</p>`;
   }
+  if(lib.tab==="shared"&&adminKey()&&apiOn())h+=adminPanel();
   h+=`<div class="libbar"><input id="libq" type="text" placeholder="搜尋英文或中文" value="${esc(lib.q)}" autocomplete="off"><span class="seg">${["all",...LVS,"none"].map(l=>`<button tabindex="-1" class="tog${lib.lv===l?" on":""}" data-act="liblv:${l}">${l==="all"?"全部":l==="none"?"未分級":l}</button>`).join("")}</span></div>`;
   h+=`<div id="liblist">${libList()}</div>`;
-  if(lib.tab==="shared"&&adminKey()&&apiOn())h+=adminPanel();
   return h;
 }
 function adminPanel(){
-  let h=`<hr><h2>站長管理</h2><p><button data-act="adm-load">載入被隱藏／待審核／被拒絕的投稿</button></p>`;
-  if(lib.admin){
-    const sec=(title,arr,acts)=>`<h2>${title} <span class="mute">${arr.length}</span></h2>`+(arr.length?arr.map(x=>`<div class="lrow"><div class="lmain"><b>${esc(x.w)}</b> <span class="mute">${esc(x.pos||"")}</span> <span>${esc(x.m||"")}</span></div><div class="lmeta"><span class="stag">${esc(x.note||x.reason||"")}</span></div><div class="lact">${acts.map(([a,l])=>`<button data-act="${a}" data-w="${esc(x.w)}"${x.id?` data-id="${x.id}"`:""}>${l}</button>`).join("")}</div></div>`).join(""):`<p class="mute">沒有。</p>`);
-    h+=sec("被回報而隱藏",lib.admin.hidden||[],[["adm-approve","恢復公開"],["adm-del","刪除"]]);
-    h+=sec("等待 AI 審核",lib.admin.pending||[],[["adm-approve","直接通過"],["adm-del","刪除"]]);
-    h+=sec("AI 拒絕的投稿",lib.admin.rejected||[],[["adm-force","強制通過"],["adm-dismiss","忽略"]]);
+  if(!lib.admin&&!lib.adminBusy){lib.adminBusy=true;api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;lib.adminErr="";}).catch(e=>{lib.adminErr=e.message;}).then(()=>{lib.adminBusy=false;render();});}
+  const a=lib.admin,n=a?(a.hidden.length+a.pending.length+a.rejected.length):0;
+  let h=`<details class="admin"${lib.adminOpen?" open":""}><summary>站長管理 ${a?`<span class="pill${n?" bad":" ok"}">${n?n+" 筆待處理":"沒有待處理"}</span>`:lib.adminErr?`<span class="pill bad">${esc(lib.adminErr)}</span>`:`<span class="mute">載入中…</span>`}</summary>`;
+  h+=`<p><button data-act="adm-load">重新載入</button></p>`;
+  if(a){
+    const sec=(title,arr,acts)=>`<h2>${title} <span class="mute">${arr.length}</span></h2>`+(arr.length?arr.map(x=>`<div class="lrow"><div class="lmain"><b>${esc(x.w)}</b> <span class="mute">${esc(x.pos||"")}</span> <span>${esc(x.m||"")}</span></div><div class="lmeta"><span class="stag">${esc(x.note||x.reason||"")}</span></div><div class="lact">${acts.map(([k,l])=>`<button data-act="${k}" data-w="${esc(x.w)}"${x.id?` data-id="${x.id}"`:""}>${l}</button>`).join("")}</div></div>`).join(""):`<p class="mute">沒有。</p>`);
+    h+=sec("被回報而隱藏",a.hidden||[],[["adm-approve","恢復公開"],["adm-del","刪除"]]);
+    h+=sec("等待 AI 審核",a.pending||[],[["adm-approve","直接通過"],["adm-del","刪除"]]);
+    h+=sec("AI 拒絕的投稿",a.rejected||[],[["adm-force","強制通過"],["adm-dismiss","忽略"]]);
+    h+=`<p class="mute">共有詞庫裡的每個字旁邊也會出現「站長刪除」按鈕。</p>`;
   }
-  return h;
+  return h+`</details>`;
 }
-
 /* ---------- AI ---------- */
 const AIK="wordbank.ai";
 let sampleFn=null;
 async function initSample(){const c=CL();if(!c)return;try{sampleFn=await c.use("sample");}catch(e){sampleFn=null;}if(sampleFn)render();}
 const hasClaude=()=>!!sampleFn;
-const AIDEF={gemini:"gemini-3.8-flash",anthropic:"claude-haiku-5-5"};
+const AIDEF={gemini:"gemini-3.5-flash",anthropic:"claude-haiku-5-5"};
 function aiCfg(){let o={};try{o=JSON.parse(localStorage.getItem(AIK)||"{}")||{};}catch(e){}return Object.assign({provider:"gemini",key:"",model:""},o);}
 function setAi(o){try{localStorage.setItem(AIK,JSON.stringify(Object.assign(aiCfg(),o)));}catch(e){}}
 function aiErr(st,m){
@@ -962,7 +965,7 @@ async function callAI(prompt){
   }
   throw lastErr||new Error("AI 暫時無法使用，請稍後再試。");
 }
-const GEMINI_FALLBACK=["gemini-3.8-flash","gemini-3.6-flash","gemini-3.5-flash-lite","gemini-3.1-flash-lite"];
+const GEMINI_FALLBACK=["gemini-3.5-flash","gemini-3.8-flash","gemini-3.6-flash","gemini-3.5-flash-lite","gemini-3.1-flash-lite"];
 function addMsgBusy(m){if(addBusy&&mode==="add"){addMsg=m;render();}}
 function buildPrompt(list){
   const topics=[...new Set(words().map(w=>w.topic))];
@@ -1161,7 +1164,9 @@ document.addEventListener("click",e=>{
   if(a==="report-go"){const r=b.dataset.r;S.hidden[w]=1;delete S.collect[w];lib.reporting=null;save();toast(`已回報「${w}」，這個字不會再出現在你的題目裡`);
     if(apiOn()&&shared.words[w])api("/api/report",{method:"POST",body:{uid:myUid(),w,reason:r}}).catch(()=>{});render();return;}
   if(a==="reshare"){shareRecs([w]);render();return;}
-  if(a==="adm-load"){api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;render();}).catch(e=>toast(e.message));return;}
+  if(a==="adm-load"){lib.adminOpen=true;api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;lib.adminErr="";render();}).catch(e=>{lib.adminErr=e.message;toast(e.message);render();});return;}
+  if(a==="adm-verify"){const el=document.getElementById("admkey");if(el)try{localStorage.setItem("volcab.admin",el.value.trim());}catch(err){}
+    api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;lib.adminErr="";lib.adminOpen=true;lib.tab="shared";toast("站長金鑰正確，已開啟站長管理");setMode("library");}).catch(e=>{msg=e.message==="站長金鑰不正確"?"站長金鑰不正確：要和 Cloudflare 裡的 ADMIN_TOKEN 一字不差。":e.message;render();});return;}
   if(a==="adm-del"||a==="adm-approve"||a==="adm-force"||a==="adm-dismiss"){
     const act={"adm-del":"delete","adm-approve":"approve","adm-force":"force","adm-dismiss":"dismiss"}[a];
     api("/api/admin/word",{method:"POST",admin:true,body:{action:act,w,id:b.dataset.id?+b.dataset.id:undefined}}).then(()=>{toast("已處理");if(lib.admin)return api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;});}).then(()=>syncShared()).catch(e=>toast(e.message)).then(()=>render());return;}
@@ -1191,7 +1196,7 @@ document.addEventListener("input",e=>{
   const el=e.target;if(el.id==="addin")addInput=el.value;
   else if(el.dataset&&el.dataset.ai)setAi({[el.dataset.ai]:el.value.trim()});
   else if(el.id==="libq"){lib.q=el.value;lib.n=80;const box=document.getElementById("liblist");if(box)box.innerHTML=libList();}
-  else if(el.id==="admkey"){try{localStorage.setItem("volcab.admin",el.value.trim());}catch(err){}}
+  else if(el.id==="admkey"){try{localStorage.setItem("volcab.admin",el.value.trim());}catch(err){}lib.admin=null;lib.adminErr="";}
   else if(el.id&&el.id.startsWith("draft-")){const d=drafts[+el.id.slice(6)];if(d)d._raw=el.value;}
 });
 document.getElementById("imp").addEventListener("change",e=>{const f=e.target.files[0];if(f)doImport(f);e.target.value="";});

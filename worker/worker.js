@@ -8,7 +8,7 @@
        ADMIN_TOKEN     站長金鑰，自己想一串 16 字以上的亂碼
    - 一般變數（Variable）：
        ALLOWED_ORIGINS 允許呼叫的網站，例如 https://rjian-collab.github.io
-       GEMINI_MODEL    （可省略）預設 gemini-3.8-flash
+       GEMINI_MODEL    （可省略）預設 gemini-3.5-flash
 
    API：
    GET  /api/health                 檢查是否正常
@@ -24,7 +24,7 @@ const POS = ["n", "v", "adj", "adv", "ph", "prefix"];
 const LIMITS = { submitPerUser: 30, submitPerIp: 100, reportPerUser: 50 };
 const HIDE_AFTER_REPORTS = 3;
 const PAGE = 1000;
-const GEMINI_FALLBACK = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
+const GEMINI_FALLBACK = ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
 
 export default {
   async fetch(request, env, ctx) {
@@ -129,7 +129,7 @@ function cleanWord(o) {
 /* ---------- AI 審核（Gemini） ---------- */
 async function aiReview(word, env) {
   if (!env.GEMINI_API_KEY) throw new Error("no key");
-  const first = env.GEMINI_MODEL || "gemini-3.8-flash";
+  const first = env.GEMINI_MODEL || "gemini-3.5-flash";
   const models = [first, ...GEMINI_FALLBACK.filter(m => m !== first)];
   const prompt = `你是英文單字卡的審核員。判斷下面這筆使用者投稿的單字資料能不能放進公開的共有單字庫。
 檢查：
