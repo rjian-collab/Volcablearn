@@ -1,0 +1,29 @@
+{
+  "name": "Volcablearn 單字閃卡",
+  "short_name": "Volcablearn",
+  "description": "用遺忘曲線背雅思單字的閃卡 App",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f4f6",
+  "theme_color": "#4f46e5",
+  "lang": "zh-Hant",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icons/icon-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
