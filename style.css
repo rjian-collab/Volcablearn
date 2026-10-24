@@ -103,6 +103,11 @@ button.xchip:hover{background:var(--pri-soft)}
 .xchip.have{border-style:solid;border-color:var(--line);color:var(--mute)}
 .qbar{display:flex;align-items:center;gap:12px;margin-bottom:10px}
 .qx{font-size:18px;color:var(--mute);padding:2px 6px;border-radius:8px}.qx.arm{font-size:13px;color:var(--red);border:1px solid var(--red)}
+.tbox{display:flex;align-items:center;gap:10px;margin:-6px 0 12px}
+.tline{flex:1;height:6px;background:var(--line);border-radius:99px;overflow:hidden}
+.tline i{display:block;height:100%;width:100%;background:var(--pri);border-radius:99px}
+.tsec{font-size:13px;color:var(--mute);font-variant-numeric:tabular-nums;min-width:3.5em;text-align:right}
+.tbox.warn .tline i{background:var(--red)}.tbox.warn .tsec{color:var(--red);font-weight:800}
 .prog.big{height:14px}.prog.big i{background:var(--green)}
 .qn{font-size:13px;color:var(--mute);font-variant-numeric:tabular-nums;min-width:4em;text-align:right}
 .qmeta{display:flex;gap:10px;align-items:center;margin-bottom:8px;font-size:13px}

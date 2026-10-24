@@ -5,7 +5,7 @@
 /* ---------- 資料（清理後，補充欄位為 AI 生成，待審核） ---------- */
 /* ---------- 狀態與儲存 ---------- */
 const KEY="wordbank.v1";
-const DEF={target:0.9,growth:2.0,maxIv:365,newLimit:5,revLimit:50,types:{spell:true,choose:true,cloze:true,extend:false},slow:{card:8,spell:10,choose:6,cloze:12,extend:12,confuse:15},pracSrs:false,offset:0,topic:"all",dir:"en",goal:50,quizLen:10};
+const DEF={target:0.9,growth:2.0,maxIv:365,newLimit:5,revLimit:50,types:{spell:true,choose:true,cloze:true,extend:false},slow:{card:8,spell:10,choose:6,cloze:12,extend:12,confuse:15},pracSrs:false,offset:0,topic:"all",dir:"en",goal:50,quizLen:10,timer:"normal"};
 const clone=o=>JSON.parse(JSON.stringify(o));
 let S, storageOk=true;
 function load(){
@@ -358,11 +358,12 @@ function onSessAnswer(q){
   if(q.res!=="wrong"){
     if(!sess.requeued[key])sess.firstOk++;
     sess.combo++;sess.maxCombo=Math.max(sess.maxCombo,sess.combo);
-    let gain=10+(q.res==="fast"?5:0);
+    const quick=q.limit?(q.ms<=q.limit*500):(q.res==="fast");
+    let gain=10+(quick?5:0);
     if(sess.combo>0&&sess.combo%5===0){gain+=10;toast(`⚡ 連對 ${sess.combo} 題！ +10`);}
     sess.xp+=gain;addXP(gain);q.gain=gain;
   }else{
-    sess.combo=0;
+    sess.combo=0;if(q.timeout)sess.timeouts=(sess.timeouts||0)+1;
     if(!sess.requeued[key]){sess.requeued[key]=1;sess.items.push(Object.assign({},it));sess.wrong.push(it);}
   }
   S.best.combo=Math.max(S.best.combo||0,sess.maxCombo);
@@ -374,11 +375,37 @@ function finishSession(){
   const got=sess.got;unlock("round1",got);if(perfect)unlock("perfect",got);if(sess.maxCombo>=10)unlock("combo10",got);checkBadges(got);
   save();celebrate();
 }
+/* ---------- 倒數計時 ---------- */
+const TBASE={choose:12,confuse:20,spell:20,cloze:25,extend:25};
+const TMODES=[["off","關閉",0],["easy","寬鬆",1.5],["normal","一般",1],["hard","挑戰",0.6]];
+function timerOn(){return (S.settings.timer||"normal")!=="off"&&mode==="quiz"&&sess&&!sess.finished;}
+function timeLimit(type){const m=(TMODES.find(x=>x[0]===(S.settings.timer||"normal"))||TMODES[2])[2];return Math.max(5,Math.round((TBASE[type]||20)*m));}
+let tTimer=null,tHidden=0;
+function stopTimer(){if(tTimer){cancelAnimationFrame(tTimer);tTimer=null;}}
+function startTimer(){
+  stopTimer();const q=cur;if(!q||q.phase!=="ask"||!q.limit)return;
+  const bar=document.getElementById("tbar"),sec=document.getElementById("tsec"),box=document.getElementById("tbox");
+  const tick=()=>{
+    if(cur!==q||q.phase!=="ask"){tTimer=null;return;}
+    if(document.hidden){tTimer=requestAnimationFrame(tick);return;}
+    const left=Math.max(0,q.limit*1000-(performance.now()-q.t0));
+    if(bar)bar.style.width=(left/(q.limit*1000)*100)+"%";
+    if(sec)sec.textContent=Math.ceil(left/1000);
+    if(box)box.classList.toggle("warn",left<=3000);
+    if(left<=0){tTimer=null;q.timeout=true;submit(q.kind==="choice"?-1:"");return;}
+    tTimer=requestAnimationFrame(tick);
+  };
+  tTimer=requestAnimationFrame(tick);
+}
+document.addEventListener("visibilitychange",()=>{
+  if(document.hidden){tHidden=performance.now();}
+  else if(tHidden){const d=performance.now()-tHidden;tHidden=0;if(cur&&cur.phase==="ask"&&cur.limit)cur.t0+=d;}
+});
 function pQuizEnd(){
   const s=sess,acc=Math.round(s.firstOk/s.base*100),perfect=s.firstOk===s.base;
   const mm=Math.floor(s.secs/60),ss=String(s.secs%60).padStart(2,"0");
   let h=`<div class="endcard"><div class="endtitle">${perfect?"完美！":acc>=80?"做得好！":"完成這一輪！"}</div><p class="sub">${TITLE[s.type]} · ${s.base} 題</p>
-    <div class="endstats"><div><b>+${s.xp}</b><span>XP</span></div><div><b>${acc}%</b><span>一次答對</span></div><div><b>${s.maxCombo}</b><span>最高連對</span></div><div><b>${mm}:${ss}</b><span>用時</span></div></div>`;
+    <div class="endstats"><div><b>+${s.xp}</b><span>XP</span></div><div><b>${acc}%</b><span>一次答對</span></div><div><b>${s.maxCombo}</b><span>最高連對</span></div><div><b>${mm}:${ss}</b><span>用時${s.timeouts?` · 超時 ${s.timeouts}`:""}</span></div></div>`;
   h+=`<div class="goalline">${hudGoalText()}</div>`;
   if(s.got.length)h+=`<div class="newbadges">${s.got.map(id=>{const b=BADGES.find(x=>x.id===id);return `<div class="badge on"><span class="bi">${b.ic}</span><b>${esc(b.name)}</b><small>${esc(b.desc)}</small></div>`;}).join("")}</div>`;
   if(s.wrong.length){h+=`<div class="wronglist"><h2>這輪答錯的</h2>${s.wrong.map(it=>{if(it.t==="confuse")return `<p>${esc(it.c.q)} → <b>${esc(it.c.o[it.c.a])}</b></p>`;const w=byW(it.w);return w?`<p><b>${esc(w.w)}</b> <span class="mute">${esc(w.pos)}</span> ${esc(w.m)}</p>`:"";}).join("")}</div>`;}
@@ -388,9 +415,10 @@ function pQuizEnd(){
 function hudGoalText(){const x=xpToday(),g=goal();return x>=g?`🎯 今日目標已達成（${x}/${g} XP）`:`今日 ${x}/${g} XP，再 ${g-x} XP 達成目標`;}
 function pQuizStart(){
   const ps=pool();
-  let h=`<div class="startcard"><h1>測驗</h1><p class="mute">一輪 ${S.settings.quizLen||10} 題，答錯的題目會在最後再出一次，全部答對才算完成。答對 +10 XP，答得快再 +5，連對 5 題再 +10。</p>`;
+  let h=`<div class="startcard"><h1>測驗</h1><p class="mute">一輪 ${S.settings.quizLen||10} 題，答錯的題目會在最後再出一次，全部答對才算完成。答對 +10 XP，剩一半以上時間答對再 +5，連對 5 題再 +10。時間到算答錯。</p>`;
   h+=`<p class="seg">${QUIZ.map(k=>`<button tabindex="-1" data-quiz="${k}" class="tog${k===quizType?" on":""}">${TITLE[k]}</button>`).join(" ")}</p>`;
   h+=`<p class="seg"><span class="mute">題數</span>${[5,10,20].map(n=>`<button tabindex="-1" class="tog${(S.settings.quizLen||10)===n?" on":""}" data-act="qlen:${n}">${n} 題</button>`).join(" ")}${quizType!=="confuse"?`<span class="mute">主題</span><button class="chip" data-act="topic">${esc(S.settings.topic==="all"?"全部主題":S.settings.topic)}</button>`:""}</p>`;
+  h+=`<p class="seg"><span class="mute">倒數計時</span>${TMODES.map(([k,l,m])=>`<button tabindex="-1" class="tog${(S.settings.timer||"normal")===k?" on":""}" data-act="timer:${k}">${l}${m?`（選擇題 ${Math.max(5,Math.round(12*m))} 秒）`:""}</button>`).join(" ")}</p>`;
   const n=quizType==="confuse"?CONF.length:fitFor(quizType==="mix"?"choose":quizType,ps).length;
   h+=`<div class="actions"><button class="btn primary wide" data-act="start-round" ${n?"":"disabled"}>開始 <kbd>Enter</kbd></button></div>`;
   if(!n)h+=`<p class="acc" style="text-align:center">這個主題目前沒有可以出的題目，換個主題或題型試試。</p>`;
@@ -404,7 +432,9 @@ function pQuiz(){
   const pctv=Math.round(sess.idx/sess.items.length*100);
   let h=`<div class="qbar"><button class="qx" data-act="quit-round" title="結束這一輪">✕</button><div class="prog big"><i style="width:${pctv}%"></i></div><span class="qn">${Math.min(sess.idx+1,sess.items.length)} / ${sess.items.length}</span></div>`;
   h+=`<div class="qmeta"><span class="pill">${TITLE[cur.type]||""}</span>${sess.combo>=2?`<span class="combo">⚡ 連對 ${sess.combo}</span>`:""}<span class="mute">本輪 +${sess.xp} XP</span></div>`;
-  return h+`<div class="qcard">${qBlock(cur)}</div>`;
+  if(timerOn()&&cur.phase==="ask"&&!cur.limit)cur.limit=timeLimit(cur.type);
+  const tb=cur.limit&&cur.phase==="ask"?`<div class="tbox" id="tbox"><div class="tline"><i id="tbar"></i></div><span class="tsec"><span id="tsec">${cur.limit}</span> 秒</span></div>`:"";
+  return h+`<div class="qcard">${tb}${qBlock(cur)}</div>`;
 }
 
 /* ---------- 閃卡 ---------- */
@@ -513,6 +543,7 @@ function render(){
   h+=({cards:pCards,add:pAdd,quiz:pQuiz,stats:pStats,review:pReview,settings:pSettings})[mode]();
   app.innerHTML=h;
   if(cur&&cur.phase==="ask"&&!cur.t0)cur.t0=performance.now();
+  if(cur&&cur.phase==="ask"&&cur.limit&&mode==="quiz")startTimer();else stopTimer();
   const ans=document.getElementById("ans");
   if(ans&&cur&&cur.phase==="ask")ans.focus();
   else if(PRACTICE.includes(mode)&&document.activeElement&&document.activeElement!==document.body)document.activeElement.blur();
@@ -537,7 +568,7 @@ function qBlock(q){
   if(q.phase==="fb"){
     if(q.kind==="input")h=h.replace(/<input id="ans"/,`<input id="ans" disabled value="${esc(q.given)}"`);
     const sec=(q.ms/1000).toFixed(1);
-    const tag=q.res==="wrong"?`<span class="pill bad">錯誤</span>`:q.res==="slow"?'<span class="pill ok">正確，但慢</span>':'<span class="pill ok">正確</span>';
+    const tag=q.timeout?`<span class="pill bad">⏰ 時間到</span>`:q.res==="wrong"?`<span class="pill bad">錯誤</span>`:q.res==="slow"?'<span class="pill ok">正確，但慢</span>':'<span class="pill ok">正確</span>';
     h+=`<hr><p class="q">${tag} · ${sec}s</p>`;
     if(q.viaGroup)h+=`<p class="q mute">同群組的字也算對；本題預期：${esc(q.answers.join(" / "))}</p>`;
     if(q.kind==="input"&&q.res==="wrong"){
@@ -875,6 +906,7 @@ document.addEventListener("click",e=>{
   if(a==="start-round"||a==="again-round"){startSession();return;}
   if(a==="quiz-menu"){sess=null;cur=null;render();return;}
   if(a==="quit-round"){if(b.dataset.arm){sess=null;cur=null;render();}else{b.dataset.arm="1";b.textContent="確定結束？";b.classList.add("arm");}return;}
+  if(a.startsWith("timer:")){S.settings.timer=a.slice(6);save();render();return;}
   if(a.startsWith("qlen:")){S.settings.quizLen=+a.slice(5);save();render();return;}
   if(a.startsWith("goal:")){S.settings.goal=+a.slice(5);save();focusAfter=`[data-act="${a}"]`;render();return;}
   if(a==="extra"){extra=shuffle(pool()).slice(0,10).map(w=>w.w);lastNote="";cur=null;render();return;}
