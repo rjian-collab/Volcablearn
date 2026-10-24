@@ -11,8 +11,8 @@
        GOOGLE_CLIENT_ID Google 登入用的用戶端 ID（xxxx.apps.googleusercontent.com）
        ADMIN_EMAILS     站長的 Gmail，多個用逗號分開
        GEMINI_MODEL     （可省略）預設 gemini-3.5-flash
-   - Workers AI 綁定（建議）：Bindings → Add binding → Workers AI，變數名稱 AI。
-     Gemini 因地區限制（例如被分到香港機房）不能用時，會自動改用 Cloudflare 的 AI 審核。
+   - Workers AI 綁定（wrangler.jsonc 已設定）：審核優先用 Cloudflare AI，失敗才用 Gemini。
+     想改成 Gemini 優先，加一般變數 REVIEW_WITH = gemini。
    需要的資料表會在第一次使用時自動建立。
 
    API：
@@ -65,7 +65,7 @@ export default {
         ai_model_in_use: (await metaGet(env, "ai_model")) || "（還沒成功審核過）",
         last_ai_error: (await metaGet(env, "ai_error")) || "（沒有）",
         placement: "（看 /api/diag 的 colo 欄位）",
-        version: "2026-10-24g",
+        version: "2026-10-24h",
       });
       else if (p === "/api/config") res = json({ google_client_id: String(env.GOOGLE_CLIENT_ID || "").trim() });
       else if (p === "/api/auth/google" && request.method === "POST") res = await authGoogle(request, env);
@@ -265,8 +265,9 @@ ${JSON.stringify(word)}`;
     }
     return null;
   };
-  // 最近被 Gemini 地區擋過、或上次是 Cloudflare AI 成功的，就先用 Cloudflare AI
-  if (env.AI && (geoBlocked || pref.startsWith("@cf/") || !env.GEMINI_API_KEY)) { const r = await tryCf(); if (r) return r; }
+  // 優先用 Cloudflare AI：快、免費、沒有地區限制，也不會用掉 Gemini 的額度（設定 REVIEW_WITH=gemini 可改回 Gemini 優先）
+  const cfFirst = env.AI && String(env.REVIEW_WITH || "").toLowerCase() !== "gemini";
+  if (env.AI && (cfFirst || geoBlocked || !env.GEMINI_API_KEY)) { const r = await tryCf(); if (r) return r; }
   if (env.GEMINI_API_KEY) {
     gem: for (const model of models.filter(m => !m.startsWith("@cf/"))) {
       for (let attempt = 0; attempt < 2; attempt++) {
@@ -283,7 +284,7 @@ ${JSON.stringify(word)}`;
         break;
       }
     }
-    if (env.AI && !(geoBlocked || pref.startsWith("@cf/"))) { const r = await tryCf(); if (r) return r; }
+    if (env.AI && !(cfFirst || geoBlocked)) { const r = await tryCf(); if (r) return r; }
   }
   await metaSet(env, "ai_error", new Date().toISOString().slice(0, 16) + " " + errs.join("；").slice(0, 380));
   throw new Error(errs.join("；") || "沒有可用的 AI（請設定 GEMINI_API_KEY 或綁定 Workers AI）");
