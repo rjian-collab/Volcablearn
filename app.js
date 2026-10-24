@@ -5,7 +5,7 @@
 /* ---------- 資料（清理後，補充欄位為 AI 生成，待審核） ---------- */
 /* ---------- 狀態與儲存 ---------- */
 const KEY="wordbank.v1";
-const DEF={target:0.9,growth:2.0,maxIv:365,newLimit:5,revLimit:50,types:{spell:true,choose:true,cloze:true,extend:false},slow:{card:8,spell:10,choose:6,cloze:12,extend:12,confuse:15},pracSrs:false,offset:0,topic:"all",dir:"en",goal:50,quizLen:10,timer:"normal"};
+const DEF={target:0.9,growth:2.0,maxIv:365,newLimit:5,revLimit:50,types:{spell:true,choose:true,cloze:true,extend:false},slow:{card:8,spell:10,choose:6,cloze:12,extend:12,confuse:15},pracSrs:false,offset:0,topic:"all",dir:"en",goal:50,quizLen:10,timer:"normal",byLevel:true,src:"all"};
 const clone=o=>JSON.parse(JSON.stringify(o));
 let S, storageOk=true;
 function load(){
@@ -17,9 +17,9 @@ function fromData(d){
   const st=Object.assign(clone(DEF),d.settings||{});
   st.types=Object.assign(clone(DEF.types),(d.settings||{}).types||{});
   st.slow=Object.assign(clone(DEF.slow),(d.settings||{}).slow||{});
-  return {settings:st,prog:d.prog||{},log:d.log||{},modeStats:d.modeStats||{},overrides:d.overrides||{},reviewed:d.reviewed||{},custom:Array.isArray(d.custom)?d.custom:[],savedAt:d.savedAt||0,xp:d.xp&&typeof d.xp==="object"?{total:+d.xp.total||0,days:d.xp.days||{}}:{total:0,days:{}},badges:d.badges||{},best:d.best||{combo:0}};
+  return {settings:st,prog:d.prog||{},log:d.log||{},modeStats:d.modeStats||{},overrides:d.overrides||{},reviewed:d.reviewed||{},custom:Array.isArray(d.custom)?d.custom:[],savedAt:d.savedAt||0,xp:d.xp&&typeof d.xp==="object"?{total:+d.xp.total||0,days:d.xp.days||{}}:{total:0,days:{}},badges:d.badges||{},best:d.best||{combo:0},lv:Object.assign({theta:null,src:"",hist:{},test:null,skip:false},d.lv||{}),collect:d.collect||{},hidden:d.hidden||{}};
 }
-function save(){S.savedAt=Date.now();try{localStorage.setItem(KEY,JSON.stringify(S));storageOk=true;}catch(e){storageOk=false;}pushCloud();}
+function save(){bump();S.savedAt=Date.now();try{localStorage.setItem(KEY,JSON.stringify(S));storageOk=true;}catch(e){storageOk=false;}pushCloud();}
 /* 雲端同步（只在 claude.ai 上開啟時可用；其他地方只存瀏覽器） */
 let cloud=null,cloudState="off",cloudTimer=null;
 const CL=()=>(typeof window!=="undefined"&&window.claude&&typeof window.claude.use==="function")?window.claude:null;
@@ -32,7 +32,7 @@ async function initCloud(){
     const ref=db.doc("data/users/"+id+"/state");
     const snap=await ref.get();
     if(snap.exists){const d=snap.data()||{};let remote=null;try{remote=JSON.parse(d.state||"null");}catch(e){}
-      if(remote&&(remote.savedAt||0)>(S.savedAt||0)){S=fromData(remote);try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}cur=null;}}
+      if(remote&&(remote.savedAt||0)>(S.savedAt||0)){S=fromData(remote);bump();try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}cur=null;}}
     cloud=ref;cloudState="on";
     if(!snap.exists||((snap.data()||{}).savedAt||0)<(S.savedAt||0))pushCloud(true);
     render();
@@ -59,8 +59,14 @@ const shuffle=a=>{a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(M
 const norm=s=>String(s).trim().toLowerCase().replace(/[’‘]/g,"'").replace(/\s+/g," ").replace(/-$/,"");
 const alts=s=>String(s).split("|");
 function eff(w){const o=S.overrides[w.w];return o?Object.assign({},w,o):w;}
-function baseWords(){return WORDS.concat(S.custom||[]);}
-function words(){return baseWords().map(eff);}
+let wver=0,_wv=-1,_wc=[];
+function bump(){wver++;}
+function baseWords(){
+  const mine=(S.custom||[]).map(x=>x.src?x:Object.assign({src:"mine"},x));
+  const core=WORDS.filter(w=>!S.hidden[w.w]);
+  return core.concat(sharedWords(),mine);
+}
+function words(){if(_wv!==wver){_wc=baseWords().map(eff);_wv=wver;}return _wc;}
 function byW(w){return words().find(x=>x.w===w);}
 const NEWP={stage:0,due:null,ease:2.5,lapses:0,stubborn:false,c:0,wr:0,slow:0,lastRes:null,lastDay:null};
 function getP(w){return S.prog[w]||NEWP;}
@@ -79,11 +85,87 @@ function letterHint(ans){
 }
 const TOPICS=[...new Set(WORDS.map(w=>w.topic))];
 function topicList(){return ["all",...new Set(words().map(w=>w.topic)),"頑固字"];}
+function inMine(w){return w.src==="mine"||!!S.collect[w.w];}
+function srcOk(w){const s=S.settings.src||"all";return s==="all"?true:s==="mine"?inMine(w):w.src!=="mine";}
 function pool(){
   const t=S.settings.topic;
-  return words().filter(w=>t==="all"?true:t==="頑固字"?getP(w.w).stubborn:w.topic===t);
+  return words().filter(w=>srcOk(w)&&(t==="all"?true:t==="頑固字"?getP(w.w).stubborn:w.topic===t));
 }
+const SRCL={all:"全部詞庫",mine:"我的詞庫",shared:"共有詞庫"};
+function srcChips(){return `<span class="seg">${["all","mine","shared"].map(k=>`<button tabindex="-1" class="tog${(S.settings.src||"all")===k?" on":""}" data-act="src:${k}">${SRCL[k]}</button>`).join("")}</span>`;}
 function avoided(a,b){return AVOID.some(([x,y])=>(x===a&&y===b)||(x===b&&y===a));}
+
+/* ---------- CEFR 等級與使用者程度 ---------- */
+const LVS=["A1","A2","B1","B2","C1","C2"];
+const CEFR_MAP=Object.create(null),PLACE={A1:[],A2:[],B1:[],B2:[],C1:[],C2:[]};
+(function(){if(typeof CEFR_LIST==="undefined")return;for(const l of LVS){for(let w of (CEFR_LIST[l]||"").split("|")){if(!w)continue;let p=false;if(w[0]==="*"){p=true;w=w.slice(1);}if(!CEFR_MAP[w])CEFR_MAP[w]=l;if(p)PLACE[l].push(w);}}})();
+const LV_STOP=new Set(["the","a","an","of","to","in","on","at","by","for","with","be","one's","sb","sth","sb's","sth's","oneself","and","or"]);
+function lookupLv(w){
+  w=String(w||"").toLowerCase().trim().replace(/-$/,"");if(!w)return null;
+  if(CEFR_MAP[w])return CEFR_MAP[w];
+  const t=[];
+  if(w.endsWith("ies"))t.push(w.slice(0,-3)+"y");if(w.endsWith("es"))t.push(w.slice(0,-2));if(w.endsWith("s"))t.push(w.slice(0,-1));
+  if(w.endsWith("ed"))t.push(w.slice(0,-2),w.slice(0,-1));if(w.endsWith("ing"))t.push(w.slice(0,-3),w.slice(0,-3)+"e");
+  if(w.endsWith("ly")){t.push(w.slice(0,-2));if(w.endsWith("ily"))t.push(w.slice(0,-3)+"y");if(/[ai]bly$/.test(w))t.push(w.slice(0,-1)+"e");}
+  for(const x of t)if(CEFR_MAP[x])return CEFR_MAP[x];
+  if(w.includes(" ")){let mx=-1;for(const p of w.split(" ")){if(LV_STOP.has(p))continue;const l=lookupLv(p);if(l)mx=Math.max(mx,LVS.indexOf(l));}if(mx>=0)return LVS[mx];}
+  return null;
+}
+function lvOf(w){return w&&LVS.includes(w.cefr)?w.cefr:lookupLv(w&&w.w);}
+const lvNum=l=>LVS.indexOf(l)+1;
+function lvBadge(w){const l=lvOf(w);return l?`<span class="lv lv${l}">${l}</span>`:`<span class="lv">未分級</span>`;}
+/* 使用者能力值 θ：1=A1 … 6=C2；答對機率 P = 1/(1+e^-(1.6(θ-b)+1.1))，θ=b 時約 75% */
+function pKnow(theta,b){return 1/(1+Math.exp(-(1.6*(theta-b)+1.1)));}
+function updateTheta(w,score){
+  if(S.lv.theta==null||!w)return;const l=lvOf(w);if(!l)return;
+  const p=pKnow(S.lv.theta,lvNum(l));
+  S.lv.theta=Math.min(6.5,Math.max(0.5,S.lv.theta+0.06*(score-p)));S.lv.hist[today()]=+S.lv.theta.toFixed(3);
+}
+function myLevel(){const t=S.lv.theta;if(t==null)return null;return LVS[Math.min(5,Math.max(0,Math.round(t)-1))];}
+function setLevel(theta,src){S.lv.theta=Math.min(6.5,Math.max(0.5,theta));S.lv.src=src;S.lv.hist[today()]=+S.lv.theta.toFixed(3);S.lv.skip=false;save();}
+function lvWeight(w){
+  if(!S.settings.byLevel||S.lv.theta==null)return 1;const l=lvOf(w);if(!l)return 1;
+  const d=lvNum(l)-Math.round(S.lv.theta);return d===0?7:d===-1?2:d===1?1.2:d<=-2?0.3:0.2;
+}
+
+/* ---------- 分級測驗：認識／不認識＋假字 ---------- */
+let pt=null;
+function startPlacement(){
+  const items=[];LVS.forEach(l=>shuffle(PLACE[l]).slice(0,10).forEach(w=>items.push({w,l})));
+  shuffle(PSEUDO).slice(0,12).forEach(w=>items.push({w,l:null}));
+  pt={items:shuffle(items),i:0,ans:[]};mode="placement";cur=null;render();
+}
+function ptAnswer(known){if(!pt||pt.done)return;pt.ans.push(!!known);pt.i++;if(pt.i>=pt.items.length)ptFinish();render();}
+function ptFinish(){
+  const by={};LVS.forEach(l=>by[l]={y:0,n:0});let fy=0,fn=0;
+  pt.items.forEach((it,k)=>{const y=pt.ans[k];if(it.l){by[it.l].n++;if(y)by[it.l].y++;}else{fn++;if(y)fy++;}});
+  const fa=fn?fy/fn:0,corr=LVS.map(l=>Math.max(0,(by[l].n?by[l].y/by[l].n:0)-fa));
+  let idx=-1;for(let i=0;i<6;i++){if(corr[i]>=0.65)idx=i;else break;}
+  const theta=idx<0?0.8:Math.min(6.4,idx+1+(idx<5?corr[idx+1]*0.45:0.3));
+  pt.done=true;pt.result={corr,fa,theta,level:idx<0?"A1":LVS[idx],below:idx<0};
+}
+function pPlacement(){
+  if(!pt)return `<div class="startcard"><h1>分級測驗</h1><p class="mute">還沒開始。</p><div class="actions"><button class="btn primary" data-act="pt-start">開始</button></div></div>`;
+  if(pt.done){
+    const r=pt.result;
+    let h=`<div class="endcard"><div class="endtitle">你的程度約是 ${r.below?"A1 以下":r.level}</div><p class="sub">${esc(LV_DESC[r.level]||"")}</p>`;
+    h+=`<div class="ptbars">${LVS.map((l,i)=>`<div class="ptb"><span>${l}</span><div class="hbar w"><i style="width:${Math.round(r.corr[i]*100)}%"></i></div><b>${Math.round(r.corr[i]*100)}%</b></div>`).join("")}</div>`;
+    h+=`<p class="mute">每一級的分數 = 認識的真字比例 − 誤認假字的比例。分數在 65% 以上、而且下面每一級也都過關的最高等級，就是你的程度。</p>`;
+    if(r.fa>0.3)h+=`<p class="acc">你把 ${Math.round(r.fa*100)}% 的假字選成「認識」，結果可能偏高或不準，建議重測時只在確定知道意思時才按「認識」。</p>`;
+    h+=`<div class="actions"><button class="btn primary" data-act="pt-save">用這個結果 <kbd>Enter</kbd></button><button class="btn ghost" data-act="pt-start">重測</button></div><p class="note">之後答題時程度會自動微調，也可以在「設定」自己改。</p></div>`;
+    return h;
+  }
+  const it=pt.items[pt.i],n=pt.items.length;
+  return `<div class="qbar"><button class="qx" data-act="pt-quit" title="離開">✕</button><div class="prog big"><i style="width:${Math.round(pt.i/n*100)}%"></i></div><span class="qn">${pt.i+1} / ${n}</span></div>
+  <div class="scene"><div class="fc"><div class="face"><span class="tag">分級測驗</span><div class="word">${esc(it.w)}</div><p class="hint">你知道這個字的意思嗎？清單裡有一些不存在的假字，亂按「認識」會扣分。</p></div></div></div>
+  <div class="actions"><button class="btn red" data-act="pt-no"><span>不認識</span><kbd>1</kbd></button><button class="btn green" data-act="pt-yes"><span>認識</span><kbd>2</kbd></button></div>`;
+}
+const LV_DESC={A1:"入門：能看懂最基本的日常用字",A2:"基礎：熟悉生活常見用字",B1:"中級：能應付大部分日常與學校情境",B2:"中高級：能讀懂一般新聞與文章",C1:"高級：學術與專業文章大多沒問題",C2:"精通：接近母語人士的詞彙量"};
+function levelPanel(compact){
+  const L=myLevel();
+  if(L==null)return `<div class="notice lvask"><p><b>先知道你的程度，題目才會剛剛好。</b></p><div class="row"><button class="btn primary" data-act="pt-start">做分級測驗（約 3 分鐘）</button><span class="mute">或自己選：</span>${LVS.map(l=>`<button class="tog" data-act="lvset:${l}">${l}</button>`).join("")}${compact?`<button class="link" data-act="lv-skip">先略過</button>`:""}</div></div>`;
+  return "";
+}
 
 /* ---------- 遺忘曲線 ----------
   記憶率   R(t) = 0.9^(t / S)       t = 距上次複習天數，S = 穩定度（記憶率掉到 90% 需要幾天）
@@ -141,7 +223,9 @@ function todayQueue(){
   const dueAll=ps.filter(w=>{const p=getP(w.w);return p.stage>0&&p.due&&p.due<=t;});
   dueAll.sort((a,b)=>curR(a.w)-curR(b.w)||getP(a.w).ease-getP(b.w).ease);   // 記憶率越低越先出
   const due=dueAll.slice(0,Math.max(0,S.settings.revLimit-l.rev));
-  const news=ps.filter(w=>getP(w.w).stage===0).slice(0,Math.max(0,S.settings.newLimit-l.new));
+  let nw=ps.filter(w=>getP(w.w).stage===0);
+  if(S.settings.byLevel&&S.lv.theta!=null)nw=nw.map((w,i)=>[w,i]).sort((a,b)=>lvWeight(b[0])-lvWeight(a[0])||a[1]-b[1]).map(x=>x[0]);
+  const news=nw.slice(0,Math.max(0,S.settings.newLimit-l.new));
   return {due,news,list:due.concat(news),dueTotal:dueAll.length};
 }
 
@@ -218,9 +302,9 @@ function diffHTML(given,target){
 }
 
 /* ---------- 介面狀態 ---------- */
-const MODES=["cards","add","quiz","stats","review","settings"];
+const MODES=["cards","quiz","add","library","stats","settings"];
 const PRACTICE=["cards","quiz"];
-const NAVL={cards:"閃卡",add:"新增",quiz:"測驗",stats:"統計",review:"審核",settings:"設定"};
+const NAVL={cards:"閃卡",quiz:"測驗",add:"新增",library:"詞庫",stats:"統計",settings:"設定"};
 const QUIZ=["mix","spell","choose","extend","cloze","confuse"];
 const TITLE={mix:"綜合",spell:"填字",choose:"選意思",extend:"延伸詞彙",cloze:"例句挖空",confuse:"易混字",stats:"統計",review:"審核補充資料",settings:"設定"};
 let mode="cards",quizType="mix",cur=null,lastPick=null,msg="",resetArm=false,editing=null,reviewOnlyPending=false,focusAfter=null;
@@ -311,15 +395,15 @@ function linkGroup(src,neww){
   if(!src.grp){S.overrides[src.w]=Object.assign({},S.overrides[src.w]||{},{grp:g});}
   return g;
 }
-function newRec(o){return Object.assign({alt:"",syn:[],der:[],col:[],ex:"",topic:"自訂",grp:"",custom:true,addedAt:today()},o);}
+function newRec(o){const r=Object.assign({alt:"",syn:[],der:[],col:[],ex:"",topic:"自訂",grp:"",custom:true,src:"mine",addedAt:today()},o);if(!r.cefr)r.cefr=lookupLv(r.w)||"";return r;}
 async function addExt(code,srcW){
   const [k,iS]=code.split(":"),i=+iS,src=byW(srcW);if(!src)return;
   if(k==="der"){const d=src.der[i];const w=d[0].toLowerCase();if(inBank(w))return toast("已經在題庫裡了");
     S.custom.push(newRec({w,pos:normPos(d[1])||"n",m:d[2]||"（待補）",der:[[src.w,src.pos,src.m]],topic:src.topic,from:src.w}));S.reviewed[w]=false;
-    save();toast(`已加入「${w}」`);checkBadges();render();return;}
+    save();toast(`已加入「${w}」`);checkBadges();render();shareRecs([w]);return;}
   if(k==="col"){const c=src.col[i];const w=blankOf(c[0]).full.toLowerCase();if(inBank(w))return toast("已經在題庫裡了");
     S.custom.push(newRec({w,pos:"ph",m:c[1]||"（待補）",syn:[],der:[[src.w,src.pos,src.m]],topic:src.topic,from:src.w}));S.reviewed[w]=false;
-    save();toast(`已加入「${w}」`);checkBadges();render();return;}
+    save();toast(`已加入「${w}」`);checkBadges();render();shareRecs([w]);return;}
   // 同義字：沒有中文，交給 AI；沒有 AI 就送到新增頁
   const s=alts(src.syn[i])[0].toLowerCase();if(inBank(s))return toast("已經在題庫裡了");
   const canAI=hasClaude()||!!aiCfg().key;
@@ -329,7 +413,7 @@ async function addExt(code,srcW){
   try{
     const items=parseAI(await callAI(buildPrompt([s])));const it=items[0];if(!it||!it.m)throw new Error("AI 沒有給出中文意思");
     if(inBank(it.w)){toast("已經在題庫裡了");}
-    else{const g=linkGroup(src,it.w);S.custom.push(newRec(Object.assign({},it,{grp:g,from:src.w,note:undefined,input:undefined})));S.reviewed[it.w]=false;save();toast(`已加入「${it.w}」（${it.m}）`);checkBadges();}
+    else{const g=linkGroup(src,it.w);S.custom.push(newRec(Object.assign({},it,{grp:g,from:src.w,note:undefined,input:undefined})));S.reviewed[it.w]=false;save();toast(`已加入「${it.w}」（${it.m}）`);checkBadges();shareRecs([it.w]);}
   }catch(e){toast("加入失敗："+e.message);}
   extBusy=false;render();
 }
@@ -418,6 +502,9 @@ function pQuizStart(){
   let h=`<div class="startcard"><h1>測驗</h1><p class="mute">一輪 ${S.settings.quizLen||10} 題，答錯的題目會在最後再出一次，全部答對才算完成。答對 +10 XP，剩一半以上時間答對再 +5，連對 5 題再 +10。時間到算答錯。</p>`;
   h+=`<p class="seg">${QUIZ.map(k=>`<button tabindex="-1" data-quiz="${k}" class="tog${k===quizType?" on":""}">${TITLE[k]}</button>`).join(" ")}</p>`;
   h+=`<p class="seg"><span class="mute">題數</span>${[5,10,20].map(n=>`<button tabindex="-1" class="tog${(S.settings.quizLen||10)===n?" on":""}" data-act="qlen:${n}">${n} 題</button>`).join(" ")}${quizType!=="confuse"?`<span class="mute">主題</span><button class="chip" data-act="topic">${esc(S.settings.topic==="all"?"全部主題":S.settings.topic)}</button>`:""}</p>`;
+  h+=`<p class="seg"><span class="mute">詞庫</span>${srcChips()}</p>`;
+  h+=`<p class="seg"><span class="mute">難度</span><button tabindex="-1" class="tog${S.settings.byLevel?" on":""}" data-act="bylevel">${myLevel()?`依我的程度（${myLevel()}）`:"依我的程度（未設定）"}</button><button tabindex="-1" class="tog${S.settings.byLevel?"":" on"}" data-act="bylevel-off">不限程度</button></p>`;
+  if(S.settings.byLevel&&!myLevel())h+=levelPanel(false);
   h+=`<p class="seg"><span class="mute">倒數計時</span>${TMODES.map(([k,l,m])=>`<button tabindex="-1" class="tog${(S.settings.timer||"normal")===k?" on":""}" data-act="timer:${k}">${l}${m?`（選擇題 ${Math.max(5,Math.round(12*m))} 秒）`:""}</button>`).join(" ")}</p>`;
   const n=quizType==="confuse"?CONF.length:fitFor(quizType==="mix"?"choose":quizType,ps).length;
   h+=`<div class="actions"><button class="btn primary wide" data-act="start-round" ${n?"":"disabled"}>開始 <kbd>Enter</kbd></button></div>`;
@@ -457,7 +544,7 @@ function grade(g){
     const p=applySRS(w,res);
     const m=S.modeStats.card||(S.modeStats.card={c:0,w:0,slow:0});res==="wrong"?m.w++:m.c++;if(res==="slow")m.slow++;
     if(res==="wrong"&&!again.includes(w))again.push(w);
-    addXP(res==="fast"?10:res==="slow"?6:2);
+    addXP(res==="fast"?10:res==="slow"?6:2);updateTheta(c.w,g===3?1:g===2?0.5:0);
     lastNote=`${w}：${res==="wrong"?"不會 → 明天再出，等一下也會再看一次":(res==="slow"?(g===3?"會，但想了 "+(c.think/1000).toFixed(0)+" 秒，記為模糊":"模糊"):"會")+" → "+diffDays(today(),p.due)+" 天後"}${p.stubborn?"（頑固字）":""}`;
   }
   const l=L(today());
@@ -473,7 +560,8 @@ function pCards(){
   const Q=todayQueue(),l=S.log[today()]||{done:0};
   const total=l.done+Q.list.length,done=l.done;
   const pctv=total?Math.round(done/total*100):100;
-  let h=`<div class="deckbar"><span>今日 <b>${done}</b> / ${total}</span><div class="prog"><i style="width:${pctv}%"></i></div><button class="chip" data-act="topic" title="切換主題 (/)">${esc(S.settings.topic==="all"?"全部主題":S.settings.topic)}</button></div>`;
+  let h=(S.lv.skip?"":levelPanel(true))+`<div class="deckbar"><span>今日 <b>${done}</b> / ${total}</span><div class="prog"><i style="width:${pctv}%"></i></div><button class="chip" data-act="topic" title="切換主題 (/)">${esc(S.settings.topic==="all"?"全部主題":S.settings.topic)}</button><button class="chip" data-act="src-cycle" title="切換詞庫">${SRCL[S.settings.src||"all"]}</button></div>`;
+  if((S.settings.src||"all")==="mine"&&!pool().length)return h+`<div class="startcard"><h1>你的詞庫還是空的</h1><p class="mute">到「新增」加入自己的單字，或到「詞庫 → 共有詞庫」收藏想背的字。</p><div class="actions"><button class="btn primary" data-mode="add">去新增單字</button><button class="btn ghost" data-act="src:all">改用全部詞庫</button></div></div>`;
   again=again.filter(x=>byW(x));
   if(!cur){
     if(Q.list.length)cur=newCard(Q.list[0],getP(Q.list[0].w).stage===0?"new":"due");
@@ -495,7 +583,7 @@ function pCards(){
     <div class="face front"><span class="tag">${tag}</span>${frontMain}<div class="pos">${esc(w.pos)}</div><p class="hint">點一下或按 Space 翻面</p></div>
     <div class="face back"><span class="tag">${tag}</span>
       ${c.kind==="due"?`<span class="rtag">預估記憶率 ${Math.round(curR(w.w)*100)}%</span>`:""}
-      <div class="word sm">${esc(w.w)} <span class="pos">${esc(w.pos)}</span></div>
+      <div class="word sm">${esc(w.w)} <span class="pos">${esc(w.pos)}</span> ${lvBadge(w)}</div>
       <div class="meaning">${esc(w.m)}</div>
       ${w.alt?`<div class="alt">另有：${esc(w.alt)}</div>`:""}
       ${exb.answers.length?`<div class="ex">${exHTML}</div>`:""}
@@ -523,6 +611,7 @@ function submit(val){
   if(q.w&&S.settings.pracSrs)q.srs=applySRS(q.w.w,q.res);
   else L(today()).prac++;
   if(sess&&!sess.finished&&mode==="quiz")onSessAnswer(q);
+  if(q.w)updateTheta(q.w,ok?1:0);
   checkBadges();save();render();
 }
 function advance(){
@@ -540,7 +629,7 @@ function render(){
   const app=document.getElementById("app");
   let h=`<header><div class="logo">Volcablearn</div><nav>${MODES.map(m=>`<button tabindex="-1" class="${m===mode?"on":""}" data-mode="${m}">${NAVL[m]}</button>`).join("")}</nav></header>${hud()}`;
   if(!storageOk)h+=`<p class="acc">> 注意：瀏覽器不允許儲存，進度只在本次分頁有效，請記得匯出 JSON。</p>`;
-  h+=({cards:pCards,add:pAdd,quiz:pQuiz,stats:pStats,review:pReview,settings:pSettings})[mode]();
+  h+=({cards:pCards,add:pAdd,quiz:pQuiz,stats:pStats,review:pReview,library:pLibrary,settings:pSettings,placement:pPlacement})[mode]();
   app.innerHTML=h;
   if(cur&&cur.phase==="ask"&&!cur.t0)cur.t0=performance.now();
   if(cur&&cur.phase==="ask"&&cur.limit&&mode==="quiz")startTimer();else stopTimer();
@@ -551,6 +640,8 @@ function render(){
   document.getElementById("foot").textContent=mode==="add"?"一行一個單字 · Ctrl+Enter 讓 AI 產生 · Tab 切換頁面":mode==="cards"
     ?"Space 翻面 · 1 不會 · 2 模糊 · 3 會 · / 換主題 · Tab 切換頁面"
     :mode==="quiz"?(sess&&!sess.finished?"Enter 送出/下一題 · 1–4 選擇 · Esc 不會 · Tab 切換頁面":"Enter 開始 · [ ] 換題型 · / 換主題 · Tab 切換頁面")
+    :mode==="placement"?"1 不認識 · 2 認識 · Tab 切換頁面"
+    :mode==="library"?"搜尋可輸入英文或中文 · Tab 切換頁面"
     :mode==="review"?"↑↓ 移動 · a 確認/取消 · e 編輯 · Ctrl+Enter 儲存 · Tab 切換模式"
     :"↑↓ 移動 · Enter 執行 · Tab 切換模式";
 }
@@ -577,7 +668,7 @@ function qBlock(q){
     if(q.after)h+=q.after;
     if(q.type==="confuse")h+=`<p class="q">${esc(q.item.why)}</p>`;
     if(q.w&&q.type!=="extend"&&!(sess&&!sess.finished)){const w=q.w;
-      h+=`<p class="q mute">${esc(w.w)} (${esc(w.pos)}) ${esc(w.m)}${w.alt?"；另有："+esc(w.alt):""}　同義：${w.syn.map(s=>esc(alts(s)[0])).join(", ")}${pending(w)}</p>`;}
+      h+=`<p class="q mute">${lvBadge(w)} ${esc(w.w)} (${esc(w.pos)}) ${esc(w.m)}${w.alt?"；另有："+esc(w.alt):""}　同義：${w.syn.map(s=>esc(alts(s)[0])).join(", ")}${pending(w)}</p>`;}
     if(q.srs)h+=`<p class="q">階段 ${q.srs.stage} · 易度 ${q.srs.ease} → 下次 ${q.srs.due}（${diffDays(today(),q.srs.due)} 天後）${q.srs.stubborn?' · <span class="acc">頑固字</span>':""}</p>`;
     if(q.gain)h+=`<p class="gain">+${q.gain} XP</p>`;
     if(q.w&&q.type==="extend")h+=extChips(q.w,"把延伸詞彙加入題庫");
@@ -587,7 +678,7 @@ function qBlock(q){
 }
 function weightedPick(ps){
   const cand=ps.filter(w=>!lastPick||w.w!==lastPick||ps.length===1);
-  const wt=cand.map(w=>{const p=getP(w.w);const r=curR(w.w);return 1+(r===null?3:(1-r)*10)+p.lapses*2+(p.stubborn?4:0);});
+  const wt=cand.map(w=>{const p=getP(w.w);const r=curR(w.w);return (1+(r===null?3:(1-r)*10)+p.lapses*2+(p.stubborn?4:0))*lvWeight(w);});
   let r=Math.random()*wt.reduce((a,b)=>a+b,0);for(let i=0;i<cand.length;i++){r-=wt[i];if(r<=0)return cand[i];}return cand[cand.length-1];
 }
 function bar(n,max){return "#".repeat(max?Math.round(n/max*20):0);}
@@ -597,12 +688,28 @@ function streak(){
   let d=today(),n=0;if(!active(d))d=addDays(d,-1);
   while(active(d)){n++;d=addDays(d,-1);}return n;
 }
+function levelStats(){
+  const L=myLevel();
+  let h=`<h2>我的程度</h2>`;
+  if(!L)return h+levelPanel(false);
+  const th=S.lv.theta,days=Object.keys(S.lv.hist).sort().slice(-30);
+  const pos=Math.min(100,Math.max(0,(th-0.5)/6*100));
+  h+=`<div class="lvscale">${LVS.map(l=>`<span class="${l===L?"on":""}">${l}</span>`).join("")}<i style="left:${pos}%"></i></div>`;
+  h+=`<p class="q"><b>${L}</b> · ${esc(LV_DESC[L])}<span class="mute">（能力值 ${th.toFixed(2)}，來源：${S.lv.src==="test"?"分級測驗":S.lv.src==="self"?"自己選擇":"答題調整"}，之後依答題自動微調）</span></p>`;
+  if(days.length>1){const vals=days.map(d=>S.lv.hist[d]),mn=Math.min(...vals,1),mx=Math.max(...vals,6);
+    const pts=vals.map((v,i)=>`${(i/(vals.length-1)*100).toFixed(1)},${(100-(v-mn)/(mx-mn||1)*100).toFixed(1)}`).join(" ");
+    h+=`<svg class="lvtrend" viewBox="0 0 100 100" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><p class="q mute">近 ${days.length} 天的程度變化</p>`;}
+  const ws=words(),cnt=LVS.map(l=>ws.filter(w=>lvOf(w)===l).length),un=ws.filter(w=>!lvOf(w)).length;
+  h+=`<p class="q mute">題庫各等級字數：${LVS.map((l,i)=>`${l} ${cnt[i]}`).join(" · ")} · 未分級 ${un}</p>`;
+  h+=`<p><button data-act="pt-start">重新做分級測驗</button></p>`;
+  return h;
+}
 function pStats(){
   const t=today(),l=S.log[t]||{done:0,c:0,wr:0,slow:0,new:0,rev:0,prac:0},ws=words();
   const lv=levelOf(S.xp.total||0),nb=BADGES.filter(b=>S.badges[b.id]).length;
   let h=`<h1>統計</h1><div class="lvcard"><div><b>Lv ${lv.lv}</b><span>累積 ${S.xp.total||0} XP</span></div><div class="prog"><i style="width:${Math.round(lv.into/lv.need*100)}%"></i></div><small>再 ${lv.need-lv.into} XP 升到 Lv ${lv.lv+1}</small></div>`;
   h+=`<h2>成就 <span class="mute">${nb} / ${BADGES.length}</span></h2><div class="badges">${BADGES.map(b=>`<div class="badge${S.badges[b.id]?" on":""}" title="${esc(b.desc)}"><span class="bi">${b.ic}</span><b>${esc(b.name)}</b><small>${S.badges[b.id]?esc(S.badges[b.id])+" 解鎖":esc(b.desc)}</small></div>`).join("")}</div>`;
-  h+=`<p class="q">最高連對：${S.best.combo||0} 題</p><hr><h2>今日 ${t}</h2>`;
+  h+=`<p class="q">最高連對：${S.best.combo||0} 題</p>`+levelStats()+`<hr><h2>今日 ${t}</h2>`;
   h+=`<p class="q">完成：${l.done}（新字 ${l.new} / 複習 ${l.rev}）· 自由練習 ${l.prac}</p>`;
   h+=`<p class="q">正確率：${pct(l.c,l.wr)}（${l.c}/${l.c+l.wr}）· 答對但慢 ${l.slow}</p>`;
   h+=`<p class="q">連續天數：${streak()} · 今日 XP：${xpToday()} / ${goal()}</p>`;
@@ -630,11 +737,11 @@ function pStats(){
   return h;
 }
 function fmtEdit(w){
-  return `pos: ${w.pos}\nmeaning: ${w.m}\nalt: ${w.alt}\ntopic: ${w.topic}\nsyn: ${w.syn.join(", ")}\nder: ${w.der.map(d=>d.join("|")).join(" ; ")}\ncol: ${w.col.map(c=>c.join("|")).join(" ; ")}\nex: ${w.ex}`;
+  return `pos: ${w.pos}\ncefr: ${w.cefr||lvOf(w)||""}\nmeaning: ${w.m}\nalt: ${w.alt}\ntopic: ${w.topic}\nsyn: ${w.syn.join(", ")}\nder: ${w.der.map(d=>d.join("|")).join(" ; ")}\ncol: ${w.col.map(c=>c.join("|")).join(" ; ")}\nex: ${w.ex}`;
 }
 function parseEdit(txt,w){
   const o={};txt.split("\n").forEach(line=>{const m=line.match(/^\s*(\w+)\s*:\s*(.*)$/);if(!m)return;const k=m[1],v=m[2].trim();
-    if(k==="pos"&&v)o.pos=v;else if(k==="meaning")o.m=v;else if(k==="alt")o.alt=v;else if(k==="topic")o.topic=v||w.topic;
+    if(k==="pos"&&v)o.pos=v;else if(k==="cefr")o.cefr=LVS.includes(v.toUpperCase())?v.toUpperCase():"";else if(k==="meaning")o.m=v;else if(k==="alt")o.alt=v;else if(k==="topic")o.topic=v||w.topic;
     else if(k==="syn")o.syn=v?v.split(",").map(s=>s.trim()).filter(Boolean):[];
     else if(k==="der")o.der=v?v.split(";").map(s=>s.split("|").map(x=>x.trim())).filter(a=>a[0]).map(a=>[a[0],a[1]||"",a[2]||""]):[];
     else if(k==="col")o.col=v?v.split(";").map(s=>s.split("|").map(x=>x.trim())).filter(a=>a[0]).map(a=>[/\{/.test(a[0])?a[0]:a[0].replace(new RegExp("\\b"+w.w.replace(/[.*+?^${}()|[\]\\]/g,"\\$&")+"\\b","i"),m=>"{"+m+"}"),a[1]||""]):[];
@@ -643,7 +750,7 @@ function parseEdit(txt,w){
   return o;
 }
 function pReview(){
-  const ws=words(),done=ws.filter(w=>S.reviewed[w.w]).length;
+  const ws=words().filter(w=>w.src!=="shared"),done=ws.filter(w=>S.reviewed[w.w]).length;
   let h=`<h1>審核補充資料 <span class="mute">${done} / ${ws.length} 已確認</span></h1>`;
   h+=`<p class="mute">同義字、派生詞、搭配詞、例句、主題由 AI 生成，可能有錯。確認無誤按 a；要修改按 e。</p>`;
   h+=`<p><button data-nav class="tog${reviewOnlyPending?" on":""}" data-act="pendonly">只顯示待審核</button>　<button data-nav data-act="approveall">全部標為已確認</button></p>`;
@@ -677,6 +784,8 @@ function pSettings(){
   h+=`<p class="q">目標記憶率（%）：<input data-nav type="number" min="70" max="97" data-k="target" value="${Math.round(st.target*100)}">　成長倍率：<input data-nav type="number" step="0.1" min="1.2" max="4" data-k="growth" value="${st.growth}">　最長間隔（天）：<input data-nav type="number" min="7" data-k="maxIv" value="${st.maxIv}"></p>`;
   h+=`<div class="formula">記憶率 R = 0.9<sup>t / S</sup>　（t＝距上次複習天數，S＝穩定度）<br>下次複習：記憶率掉到目標值的那一天 → 間隔 = S × ln(目標) / ln(0.9)<br>按「會」：S × 成長倍率 × 易度/2.5 × (1 + 快忘程度)；「模糊」：S × 1.2；「不會」：S × 0.3，隔天再出<br><span class="mute">目標記憶率調高 → 複習更頻繁、更不容易忘；調低 → 複習量變少。</span></div>`;
   h+=`<p class="q">每日新字上限：<input data-nav type="number" min="0" data-k="newLimit" value="${st.newLimit}">　每日複習上限：<input data-nav type="number" min="0" data-k="revLimit" value="${st.revLimit}"></p>`;
+  h+=`<h2>我的程度（CEFR）</h2><p>${LVS.map(l=>`<button data-nav class="tog${myLevel()===l?" on":""}" data-act="lvset:${l}">${l}</button>`).join(" ")}　<button data-nav data-act="pt-start">做分級測驗</button></p><p class="q mute">${myLevel()?`目前 ${myLevel()}：${esc(LV_DESC[myLevel()])}。答題時會自動微調。`:"還沒設定。"}</p>`;
+  h+=`<p>${chk(S.settings.byLevel,"依我的程度挑新字和測驗題","bylevel-toggle")}</p>`;
   h+=`<h2>卡片正面</h2><p>${[["en","英文 → 中文"],["zh","中文 → 英文"],["mix","混合"]].map(([k,l])=>`<button data-nav class="tog${st.dir===k?" on":""}" data-act="dir:${k}">${l}</button>`).join("　")}</p>`;
   h+=`<h2>「答對但慢」門檻（秒）<span class="mute"> card＝翻面前想多久</span></h2><p>${Object.keys(st.slow).map(k=>`${k} <input data-nav type="number" min="1" data-k="slow:${k}" value="${st.slow[k]}">`).join("　")}</p>`;
   h+=`<h2>每日目標</h2><p>${[20,50,100,150].map(n=>`<button data-nav class="tog${st.goal===n?" on":""}" data-act="goal:${n}">${n} XP${n===20?"（輕鬆）":n===50?"（一般）":n===100?"（認真）":"（衝刺）"}</button>`).join(" ")}</p>`;
@@ -692,9 +801,115 @@ function pSettings(){
   h+=`<p><button data-nav data-act="aitest">測試連線</button>${ai.key?`　<button data-nav data-act="aiclear">清除金鑰</button>`:""}</p>`;
   h+=keyGuide(ai.provider,!ai.key);
   }
+  h+=`<h2>共有詞庫</h2><p class="q mute">${apiOn()?`已連上共有詞庫伺服器（${Object.keys(shared.words).length} 個社群單字）。`:CL()?"在 claude.ai 上開啟時無法使用共有詞庫。":"這個網站還沒設定共有詞庫伺服器（站長要在 config.js 填入網址）。"}</p>`;
+  if(apiOn())h+=`<p class="q">站長金鑰：<input data-nav id="admkey" type="password" class="wide" value="${esc(adminKey())}" placeholder="只有站長需要填" autocomplete="off"> <span class="mute">填了之後「詞庫 → 共有詞庫」會出現管理功能</span></p>`;
   h+=`<h2>資料</h2><p class="q mute">${cloudState==="on"?"進度會自動同步到你的 Claude 帳號，換電腦打開這個網頁也看得到。":cloudState==="readonly"?"這個網頁目前不能幫你存到雲端，進度只存在這台裝置的瀏覽器，記得定期匯出備份。":"進度存在這台裝置的瀏覽器，換電腦或清除瀏覽資料會不見，記得定期匯出備份。"}</p>`;
   h+=`<p><button data-nav data-act="export">匯出 JSON</button>　<button data-nav data-act="import">匯入 JSON</button>　<button data-nav data-act="exportwords">匯出詞庫（含審核狀態）</button></p>`;
+  h+=`<h2>資料來源</h2><p class="q mute">CEFR 單字等級：A1～B2 取自 CEFR-J Wordlist v1.5（Tono Laboratory, TUFS）；C1～C2 取自 Octanove Vocabulary Profile C1/C2 v1.0（Octanove Labs，CC BY-SA 4.0）。</p>`;
   h+=`<p><button data-nav data-act="reset" class="${resetArm?"acc":""}">${resetArm?"再按一次確認重設":"重設學習進度"}</button> <span class="mute">（審核與修改會保留）</span></p>`;
+  return h;
+}
+
+/* ---------- 共有詞庫（Cloudflare Worker API） ---------- */
+const API=(((typeof window!=="undefined"&&window.VOLCAB_CONFIG)||{}).apiBase||"").replace(/\/+$/,"");
+function apiOn(){return !!API&&!CL();}
+const SHK="volcab.shared";
+let shared={since:0,words:{}},shSync="idle",shLast=0;
+function loadShared(){try{const d=JSON.parse(localStorage.getItem(SHK)||"null");if(d&&d.words)shared=d;}catch(e){}}
+function saveShared(){try{localStorage.setItem(SHK,JSON.stringify(shared));}catch(e){}}
+function myUid(){let u="anon";try{u=localStorage.getItem("volcab.uid");if(!u){u=Array.from(crypto.getRandomValues(new Uint8Array(12)),b=>b.toString(16).padStart(2,"0")).join("");localStorage.setItem("volcab.uid",u);}}catch(e){}return u;}
+function adminKey(){try{return localStorage.getItem("volcab.admin")||"";}catch(e){return "";}}
+async function api(path,opt){
+  opt=opt||{};const h={"Content-Type":"application/json"};if(opt.admin)h.Authorization="Bearer "+adminKey();
+  let r;try{r=await fetch(API+path,{method:opt.method||"GET",headers:h,body:opt.body?JSON.stringify(opt.body):undefined});}catch(e){throw new Error("連不上共有詞庫伺服器");}
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||("伺服器錯誤 "+r.status));return j;
+}
+async function syncShared(){
+  if(!apiOn()||shSync==="busy")return;shSync="busy";
+  try{let more=true,g=0;while(more&&g++<30){const j=await api("/api/words?since="+(shared.since||0));
+      (j.words||[]).forEach(x=>{if(x.status!=="approved")delete shared.words[x.w];else shared.words[x.w]=x;});
+      shared.since=j.next||shared.since;more=!!j.more;}
+    saveShared();shSync="ok";shLast=Date.now();bump();
+  }catch(e){shSync="error";}
+  if(mode==="library"||mode==="cards"&&!cur)render();
+}
+function sharedWords(){
+  const have=new Set(WORDS.map(w=>w.w).concat((S.custom||[]).map(w=>w.w)));
+  return Object.values(shared.words).filter(x=>x&&x.w&&!have.has(x.w)&&!S.hidden[x.w]).map(x=>({w:x.w,pos:x.pos||"n",m:x.m||"",alt:x.alt||"",syn:x.syn||[],der:x.der||[],col:x.col||[],ex:x.ex||"",topic:x.topic||"社群",grp:"",cefr:x.cefr||"",src:"shared"}));
+}
+async function shareRecs(list){
+  if(!apiOn()||!list.length)return;
+  for(const w of list){
+    const rec=(S.custom||[]).find(x=>x.w===w);if(!rec)continue;
+    rec.share={st:"sending"};
+    try{const j=await api("/api/words",{method:"POST",body:{uid:myUid(),word:{w:rec.w,pos:rec.pos,m:rec.m,alt:rec.alt,syn:rec.syn,der:rec.der,col:rec.col,ex:rec.ex,topic:rec.topic,cefr:rec.cefr}}});
+      rec.share={st:j.result,reason:j.reason||""};
+      if(j.word&&j.word.cefr&&!rec.cefr)rec.cefr=j.word.cefr;
+      toast(j.result==="approved"?`「${w}」已加入共有詞庫`:j.result==="exists"?`「${w}」共有詞庫裡已經有了`:j.result==="pending"?`「${w}」排隊等 AI 審核中`:`「${w}」沒有通過審核：${j.reason||""}`);
+    }catch(e){rec.share={st:"error",reason:e.message};}
+    save();
+  }
+  syncShared();render();
+}
+const SHL={sending:"分享中…",approved:"已在共有詞庫",exists:"共有詞庫已有",pending:"等待審核",rejected:"未通過審核",error:"分享失敗",off:"只存在我的詞庫"};
+
+/* ---------- 詞庫頁：我的／共有／待審核 ---------- */
+let lib={tab:"mine",q:"",lv:"all",n:80,reporting:null,admin:null};
+function libRows(){
+  const ws=words();
+  let xs=lib.tab==="mine"?ws.filter(inMine):ws.filter(w=>w.src!=="mine");
+  const q=lib.q.trim().toLowerCase();
+  if(q)xs=xs.filter(w=>w.w.includes(q)||String(w.m).includes(q));
+  if(lib.lv!=="all")xs=xs.filter(w=>(lvOf(w)||"none")===lib.lv);
+  if(lib.tab==="mine")xs=xs.slice().sort((a,b)=>(b.addedAt||"").localeCompare(a.addedAt||"")||a.w.localeCompare(b.w));
+  else xs=xs.slice().sort((a,b)=>(lvNum(lvOf(a)||"C2")-lvNum(lvOf(b)||"C2"))||a.w.localeCompare(b.w));
+  return xs;
+}
+function libList(){
+  const xs=libRows();if(!xs.length)return `<p class="mute libempty">${lib.tab==="mine"?"你的詞庫還沒有字。到「新增」加入自己的單字，或在「共有詞庫」按「收藏」。":"沒有符合的單字。"}</p>`;
+  const adm=!!adminKey()&&apiOn();
+  let h=xs.slice(0,lib.n).map(w=>{
+    const tag=w.src==="mine"?`<span class="stag mine">我新增的</span>`:w.src==="shared"?`<span class="stag">社群</span>`:`<span class="stag">內建</span>`;
+    const sh=w.src==="mine"&&apiOn()?`<span class="stag ${w.share&&w.share.st==="approved"?"ok":w.share&&(w.share.st==="rejected"||w.share.st==="error")?"bad":""}" title="${esc(w.share&&w.share.reason||"")}">${SHL[(w.share&&w.share.st)||"off"]}${w.share&&w.share.reason&&w.share.st!=="approved"?"："+esc(w.share.reason):""}</span>`:"";
+    let act="";
+    if(w.src==="mine"){
+      if(apiOn()&&(!w.share||["error","rejected","off"].includes(w.share.st)))act+=`<button data-act="reshare" data-w="${esc(w.w)}">分享到共有</button>`;
+      act+=`<button data-act="delword" data-w="${esc(w.w)}">${delArm===w.w?"再按一次確認刪除":"刪除"}</button>`;
+    }else{
+      act+=S.collect[w.w]?`<button data-act="uncollect" data-w="${esc(w.w)}">已收藏 ✓</button>`:`<button data-act="collect" data-w="${esc(w.w)}">收藏</button>`;
+      act+=`<button data-act="report" data-w="${esc(w.w)}">回報</button>`;
+      if(adm&&w.src==="shared")act+=`<button data-act="adm-del" data-w="${esc(w.w)}">站長刪除</button>`;
+    }
+    let row=`<div class="lrow"><div class="lmain"><b>${esc(w.w)}</b> <span class="mute">${esc(w.pos)}</span> ${lvBadge(w)} <span>${esc(w.m)}</span></div><div class="lmeta">${tag}${sh}</div><div class="lact">${act}</div>`;
+    if(lib.reporting===w.w)row+=`<div class="lrep"><span class="mute">哪裡有問題？</span>${["中文意思錯誤","例句或搭配錯誤","不是英文或拼錯","不當內容"].map(r=>`<button data-act="report-go" data-w="${esc(w.w)}" data-r="${r}">${r}</button>`).join("")}<button data-act="report-cancel">取消</button></div>`;
+    return row+`</div>`;
+  }).join("");
+  if(xs.length>lib.n)h+=`<p style="text-align:center"><button data-act="lib-more">再顯示 ${Math.min(200,xs.length-lib.n)} 個（共 ${xs.length}）</button></p>`;
+  return h;
+}
+function pLibrary(){
+  const ws=words(),nMine=ws.filter(inMine).length,nShared=ws.filter(w=>w.src!=="mine").length,nRev=ws.filter(w=>!S.reviewed[w.w]&&w.src!=="shared").length;
+  let h=`<div class="libtabs">${[["mine",`我的詞庫 ${nMine}`],["shared",`共有詞庫 ${nShared}`],["review",`待審核 ${nRev}`]].map(([k,l])=>`<button class="tog${lib.tab===k?" on":""}" data-act="lib:${k}">${l}</button>`).join("")}</div>`;
+  if(lib.tab==="review")return h+pReview();
+  if(lib.tab==="shared"){
+    h+=apiOn()?`<p class="mute">共有詞庫是大家一起建立的：別人新增、通過 AI 審核的字會出現在這裡。${shSync==="busy"?"同步中…":shSync==="error"?'<span class="acc">同步失敗，稍後再試。</span>':shLast?"已同步。":""} <button class="link" data-act="sync">立即同步</button></p>`
+      :`<p class="mute">${CL()?"在 claude.ai 上開啟時無法連到共有詞庫伺服器，這裡只顯示內建單字。":"這個網站還沒連上共有詞庫伺服器，目前只有內建單字。"}</p>`;
+  }else{
+    h+=`<p class="mute">你自己新增的字，以及從共有詞庫收藏的字。${apiOn()?"新增的字會自動送去 AI 審核，通過後大家都能用。":""}</p>`;
+  }
+  h+=`<div class="libbar"><input id="libq" type="text" placeholder="搜尋英文或中文" value="${esc(lib.q)}" autocomplete="off"><span class="seg">${["all",...LVS,"none"].map(l=>`<button tabindex="-1" class="tog${lib.lv===l?" on":""}" data-act="liblv:${l}">${l==="all"?"全部":l==="none"?"未分級":l}</button>`).join("")}</span></div>`;
+  h+=`<div id="liblist">${libList()}</div>`;
+  if(lib.tab==="shared"&&adminKey()&&apiOn())h+=adminPanel();
+  return h;
+}
+function adminPanel(){
+  let h=`<hr><h2>站長管理</h2><p><button data-act="adm-load">載入被隱藏／待審核／被拒絕的投稿</button></p>`;
+  if(lib.admin){
+    const sec=(title,arr,acts)=>`<h2>${title} <span class="mute">${arr.length}</span></h2>`+(arr.length?arr.map(x=>`<div class="lrow"><div class="lmain"><b>${esc(x.w)}</b> <span class="mute">${esc(x.pos||"")}</span> <span>${esc(x.m||"")}</span></div><div class="lmeta"><span class="stag">${esc(x.note||x.reason||"")}</span></div><div class="lact">${acts.map(([a,l])=>`<button data-act="${a}" data-w="${esc(x.w)}"${x.id?` data-id="${x.id}"`:""}>${l}</button>`).join("")}</div></div>`).join(""):`<p class="mute">沒有。</p>`);
+    h+=sec("被回報而隱藏",lib.admin.hidden||[],[["adm-approve","恢復公開"],["adm-del","刪除"]]);
+    h+=sec("等待 AI 審核",lib.admin.pending||[],[["adm-approve","直接通過"],["adm-del","刪除"]]);
+    h+=sec("AI 拒絕的投稿",lib.admin.rejected||[],[["adm-force","強制通過"],["adm-dismiss","忽略"]]);
+  }
   return h;
 }
 
@@ -735,7 +950,7 @@ function buildPrompt(list){
   const topics=[...new Set(words().map(w=>w.topic))];
   return `你是幫台灣學生製作英文單字閃卡的助手。請為下列每個英文單字或片語各產生一筆資料，只輸出一個 JSON 陣列，不要輸出其他文字或 Markdown。
 每筆格式：
-{"input":"使用者輸入的原字","w":"英文原形，小寫；片語保留空格；若明顯拼錯請改正","pos":"n、v、adj、adv、ph、prefix 其中之一","m":"繁體中文主要意思，選最常用的意思，12 字以內","alt":"其他常見意思（繁體中文），沒有就空字串","syn":["1 到 2 個英文同義字，優先選比原字更進階的"],"der":[["派生字","詞性","繁體中文"]],"col":[["常見搭配詞，目標字用大括號包起來並寫出實際詞形，例如 {exceed} expectations","繁體中文"]],"ex":"一句自然、常見情境的英文例句，目標字只出現一次並用大括號包起來，寫出實際詞形，例如 House prices {soared} in 2021.","topic":"從這些主題選一個：${topics.join("、")}；都不適合就自訂 2 到 4 字的繁體中文主題","note":"如果輸入不是英文單字或可能拼錯，用繁體中文簡短說明；否則空字串"}
+{"input":"使用者輸入的原字","w":"英文原形，小寫；片語保留空格；若明顯拼錯請改正","pos":"n、v、adj、adv、ph、prefix 其中之一","m":"繁體中文主要意思，選最常用的意思，12 字以內","alt":"其他常見意思（繁體中文），沒有就空字串","syn":["1 到 2 個英文同義字，優先選比原字更進階的"],"der":[["派生字","詞性","繁體中文"]],"col":[["常見搭配詞，目標字用大括號包起來並寫出實際詞形，例如 {exceed} expectations","繁體中文"]],"ex":"一句自然、常見情境的英文例句，目標字只出現一次並用大括號包起來，寫出實際詞形，例如 House prices {soared} in 2021.","cefr":"這個字的 CEFR 等級：A1、A2、B1、B2、C1、C2 其中之一","topic":"從這些主題選一個：${topics.join("、")}；都不適合就自訂 2 到 4 字的繁體中文主題","note":"如果輸入不是英文單字或可能拼錯，用繁體中文簡短說明；否則空字串"}
 der 最多 3 個，col 2 個。所有中文都用繁體中文。
 單字：
 ${list.map(x=>"- "+x).join("\n")}`;
@@ -756,7 +971,7 @@ function normAI(o){
   return {w,pos,m:str(o.m),alt:str(o.alt),syn:arr(o.syn).map(str).filter(Boolean).slice(0,3),
     der:arr(o.der).filter(Array.isArray).map(d=>[str(d[0]),str(d[1]),str(d[2])]).filter(d=>d[0]).slice(0,3),
     col:arr(o.col).filter(Array.isArray).map(c=>[wrapWord(str(c[0]),w),str(c[1])]).filter(c=>c[0]).slice(0,3),
-    ex:wrapWord(str(o.ex),w),topic:str(o.topic)||"自訂",grp:"",note:str(o.note),input:str(o.input)};
+    ex:wrapWord(str(o.ex),w),cefr:LVS.includes(str(o.cefr).toUpperCase())?str(o.cefr).toUpperCase():"",topic:str(o.topic)||"自訂",grp:"",note:str(o.note),input:str(o.input)};
 }
 function parseAI(text){
   const a=text.indexOf("["),b=text.lastIndexOf("]");
@@ -801,7 +1016,8 @@ function readDraft(i){
 }
 function commitDraft(i){
   const o=readDraft(i);
-  const rec={w:o.w,pos:o.pos||"n",m:o.m,alt:o.alt||"",syn:o.syn||[],der:o.der||[],col:o.col||[],ex:o.ex||"",topic:o.topic||"自訂",grp:"",custom:true,addedAt:today()};
+  const rec={w:o.w,pos:o.pos||"n",m:o.m,alt:o.alt||"",syn:o.syn||[],der:o.der||[],col:o.col||[],ex:o.ex||"",topic:o.topic||"自訂",cefr:o.cefr||lookupLv(o.w)||"",grp:"",custom:true,src:"mine",addedAt:today()};
+  if(apiOn())rec.share={st:"sending"};
   S.custom.push(rec);S.reviewed[rec.w]=false;return rec.w;
 }
 function pAdd(){
@@ -867,7 +1083,7 @@ async function download(name,obj){
 function doImport(file){
   const r=new FileReader();
   r.onload=()=>{try{const d=JSON.parse(r.result);if(!d||typeof d!=="object"||!("prog" in d||"settings" in d))throw new Error("格式不符");
-    S=fromData(d);save();msg="已匯入 "+file.name;}catch(e){msg="匯入失敗："+e.message;}render();};
+    S=fromData(d);bump();save();msg="已匯入 "+file.name;}catch(e){msg="匯入失敗："+e.message;}render();};
   r.readAsText(file);
 }
 
@@ -893,9 +1109,9 @@ document.addEventListener("click",e=>{
     try{
       if(a==="dropall"){drafts=[];addMsg="已全部捨棄。";}
       else if(a==="dropdraft"){drafts.splice(+b.dataset.i,1);addMsg="";}
-      else if(a==="adddraft"){const w=commitDraft(+b.dataset.i);drafts.splice(+b.dataset.i,1);save();addMsg=`已加入「${w}」，明天起會出現在閃卡裡（今天若還有新字名額也會出現）。`;}
+      else if(a==="adddraft"){const w=commitDraft(+b.dataset.i);drafts.splice(+b.dataset.i,1);save();addMsg=`已加入「${w}」到我的詞庫。${apiOn()?"同時送去 AI 審核，通過後會加入共有詞庫。":""}`;shareRecs([w]);}
       else{const recs=drafts.map((d,i)=>readDraft(i));const seen=new Set();recs.forEach(r=>{if(seen.has(r.w))throw new Error(r.w+" 重複了兩次。");seen.add(r.w);});
-        const added=drafts.map((d,i)=>commitDraft(i));drafts=[];save();addMsg=`已加入 ${added.length} 個字：${added.join("、")}`;}
+        const added=drafts.map((d,i)=>commitDraft(i));drafts=[];save();addMsg=`已加入 ${added.length} 個字到我的詞庫：${added.join("、")}${apiOn()?"。同時送去 AI 審核，通過後會加入共有詞庫。":""}`;shareRecs(added);}
     }catch(err){addMsg=err.message;addErr=true;}
     render();return;
   }
@@ -904,6 +1120,33 @@ document.addEventListener("click",e=>{
   if(a==="aitest"){msg="測試中…";render();callAI('Reply with exactly: OK').then(r=>{msg="連線成功："+r.trim().slice(0,40);render();}).catch(err=>{msg=err.message;render();});return;}
   if(a==="delword"){if(delArm!==w){delArm=w;render();return;}S.custom=S.custom.filter(x=>x.w!==w);delete S.prog[w];delete S.overrides[w];delete S.reviewed[w];again=again.filter(x=>x!==w);delArm=null;save();msg=w+" 已刪除";render();return;}
   if(a==="start-round"||a==="again-round"){startSession();return;}
+  if(a==="pt-start"){startPlacement();return;}
+  if(a==="pt-yes"){ptAnswer(true);return;}
+  if(a==="pt-no"){ptAnswer(false);return;}
+  if(a==="pt-quit"){pt=null;setMode("cards");return;}
+  if(a==="pt-save"){if(pt&&pt.result){setLevel(pt.result.theta,"test");S.lv.test={date:today(),corr:pt.result.corr,fa:pt.result.fa};save();toast(`程度設定為 ${myLevel()}`);}pt=null;setMode("cards");return;}
+  if(a.startsWith("lvset:")){const l=a.slice(6);setLevel(lvNum(l),"self");toast(`程度設定為 ${l}`);render();return;}
+  if(a==="lv-skip"){S.lv.skip=true;save();render();return;}
+  if(a.startsWith("src:")){S.settings.src=a.slice(4);save();cur=null;render();return;}
+  if(a==="src-cycle"){const o=["all","mine","shared"];S.settings.src=o[(o.indexOf(S.settings.src||"all")+1)%3];save();cur=null;render();return;}
+  if(a==="bylevel"){S.settings.byLevel=true;save();render();return;}
+  if(a==="bylevel-off"){S.settings.byLevel=false;save();render();return;}
+  if(a==="bylevel-toggle"){S.settings.byLevel=!S.settings.byLevel;save();focusAfter='[data-act="bylevel-toggle"]';render();return;}
+  if(a.startsWith("lib:")){lib.tab=a.slice(4);lib.n=80;lib.reporting=null;if(lib.tab==="shared")syncShared();render();return;}
+  if(a.startsWith("liblv:")){lib.lv=a.slice(6);lib.n=80;render();return;}
+  if(a==="lib-more"){lib.n+=200;render();return;}
+  if(a==="sync"){syncShared();render();return;}
+  if(a==="collect"){S.collect[w]=1;save();toast(`已收藏「${w}」到我的詞庫`);render();return;}
+  if(a==="uncollect"){delete S.collect[w];save();render();return;}
+  if(a==="report"){lib.reporting=w;render();return;}
+  if(a==="report-cancel"){lib.reporting=null;render();return;}
+  if(a==="report-go"){const r=b.dataset.r;S.hidden[w]=1;delete S.collect[w];lib.reporting=null;save();toast(`已回報「${w}」，這個字不會再出現在你的題目裡`);
+    if(apiOn()&&shared.words[w])api("/api/report",{method:"POST",body:{uid:myUid(),w,reason:r}}).catch(()=>{});render();return;}
+  if(a==="reshare"){shareRecs([w]);render();return;}
+  if(a==="adm-load"){api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;render();}).catch(e=>toast(e.message));return;}
+  if(a==="adm-del"||a==="adm-approve"||a==="adm-force"||a==="adm-dismiss"){
+    const act={"adm-del":"delete","adm-approve":"approve","adm-force":"force","adm-dismiss":"dismiss"}[a];
+    api("/api/admin/word",{method:"POST",admin:true,body:{action:act,w,id:b.dataset.id?+b.dataset.id:undefined}}).then(()=>{toast("已處理");if(lib.admin)return api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;});}).then(()=>syncShared()).catch(e=>toast(e.message)).then(()=>render());return;}
   if(a==="quiz-menu"){sess=null;cur=null;render();return;}
   if(a==="quit-round"){if(b.dataset.arm){sess=null;cur=null;render();}else{b.dataset.arm="1";b.textContent="確定結束？";b.classList.add("arm");}return;}
   if(a.startsWith("timer:")){S.settings.timer=a.slice(6);save();render();return;}
@@ -929,6 +1172,8 @@ document.addEventListener("click",e=>{
 document.addEventListener("input",e=>{
   const el=e.target;if(el.id==="addin")addInput=el.value;
   else if(el.dataset&&el.dataset.ai)setAi({[el.dataset.ai]:el.value.trim()});
+  else if(el.id==="libq"){lib.q=el.value;lib.n=80;const box=document.getElementById("liblist");if(box)box.innerHTML=libList();}
+  else if(el.id==="admkey"){try{localStorage.setItem("volcab.admin",el.value.trim());}catch(err){}}
   else if(el.id&&el.id.startsWith("draft-")){const d=drafts[+el.id.slice(6)];if(d)d._raw=el.value;}
 });
 document.getElementById("imp").addEventListener("change",e=>{const f=e.target.files[0];if(f)doImport(f);e.target.value="";});
@@ -960,6 +1205,10 @@ document.addEventListener("keydown",e=>{
     return;
   }
   if(e.ctrlKey||e.metaKey||e.altKey)return;
+  if(mode==="placement"&&pt){
+    if(!pt.done){if(e.key==="1"||e.key==="ArrowLeft"){e.preventDefault();ptAnswer(false);}else if(e.key==="2"||e.key==="ArrowRight"){e.preventDefault();ptAnswer(true);}return;}
+    if(e.key==="Enter"){e.preventDefault();document.querySelector('[data-act="pt-save"]').click();}return;
+  }
   if(mode==="cards"){
     if(e.key==="/"){e.preventDefault();cycleTopic();return;}
     if(!cur){if(e.key==="Enter"){e.preventDefault();const x=document.querySelector('[data-act="extra"]');if(x)x.click();}return;}
@@ -986,7 +1235,7 @@ document.addEventListener("keydown",e=>{
         return;
   }
   if(e.key==="ArrowDown"||e.key==="ArrowUp"){e.preventDefault();navFocus(e.key==="ArrowDown"?1:-1);return;}
-  if(mode==="review"&&tag!=="INPUT"){
+  if((mode==="review"||mode==="library"&&lib.tab==="review")&&tag!=="INPUT"){
     const blk=tg.closest&&tg.closest(".blk");if(!blk)return;
     if(e.key==="a"){e.preventDefault();blk.querySelector('[data-act="approve"]').click();}
     if(e.key==="e"){e.preventDefault();blk.querySelector('[data-act="edit"]').click();}
@@ -994,9 +1243,9 @@ document.addEventListener("keydown",e=>{
 });
 
 /* 測試用介面 */
-window.WB={get sess(){return sess;},levelOf,streak,parseAI,normAI,buildPrompt,get drafts(){return drafts;},grade,flip,get again(){return again;},get S(){return S;},applySRS,todayQueue,today,addDays,diffDays,ivFromS,nextS,retention,curR,words,makeQ,distractors,setOffset:n=>{S.settings.offset=n;save();},render,setMode,submit,get cur(){return cur;}};
+window.WB={get sess(){return sess;},get pt(){return pt;},get lib(){return lib;},myLevel,lvOf,pool,levelOf,streak,parseAI,normAI,buildPrompt,get drafts(){return drafts;},grade,flip,get again(){return again;},get S(){return S;},applySRS,todayQueue,today,addDays,diffDays,ivFromS,nextS,retention,curR,words,makeQ,distractors,setOffset:n=>{S.settings.offset=n;save();},render,setMode,submit,get cur(){return cur;}};
 load();render();
-initCloud();initSample();
+loadShared();bump();initCloud();initSample();syncShared();setInterval(()=>{if(!document.hidden)syncShared();},10*60*1000);
 if("serviceWorker" in navigator&&!CL()&&/github\.io$|^localhost$|^127\./.test(location.hostname)){const had=!!navigator.serviceWorker.controller;let reloaded=false;
   navigator.serviceWorker.register("sw.js",{updateViaCache:"none"}).then(r=>r.update()).catch(()=>{});
   navigator.serviceWorker.addEventListener("controllerchange",()=>{if(had&&!reloaded){reloaded=true;location.reload();}});}
