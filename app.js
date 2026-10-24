@@ -1166,7 +1166,7 @@ document.addEventListener("click",e=>{
   if(a==="reshare"){shareRecs([w]);render();return;}
   if(a==="adm-load"){lib.adminOpen=true;api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;lib.adminErr="";render();}).catch(e=>{lib.adminErr=e.message;toast(e.message);render();});return;}
   if(a==="adm-verify"){const el=document.getElementById("admkey");if(el)try{localStorage.setItem("volcab.admin",el.value.trim());}catch(err){}
-    api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;lib.adminErr="";lib.adminOpen=true;lib.tab="shared";toast("站長金鑰正確，已開啟站長管理");setMode("library");}).catch(e=>{msg=e.message==="站長金鑰不正確"?"站長金鑰不正確：要和 Cloudflare 裡的 ADMIN_TOKEN 一字不差。":e.message;render();});return;}
+    api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;lib.adminErr="";lib.adminOpen=true;lib.tab="shared";toast("站長金鑰正確，已開啟站長管理");setMode("library");}).catch(e=>{msg=e.message==="站長金鑰不正確"?"站長金鑰不正確：要和 Cloudflare 裡的 ADMIN_TOKEN 一字不差（大小寫也要一樣）。":e.message==="找不到這個 API"?"Worker 的程式還是舊版，請把 GitHub 上最新的 worker/worker.js 貼到 Cloudflare 並 Deploy。":e.message;render();});return;}
   if(a==="adm-del"||a==="adm-approve"||a==="adm-force"||a==="adm-dismiss"){
     const act={"adm-del":"delete","adm-approve":"approve","adm-force":"force","adm-dismiss":"dismiss"}[a];
     api("/api/admin/word",{method:"POST",admin:true,body:{action:act,w,id:b.dataset.id?+b.dataset.id:undefined}}).then(()=>{toast("已處理");if(lib.admin)return api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;});}).then(()=>syncShared()).catch(e=>toast(e.message)).then(()=>render());return;}

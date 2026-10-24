@@ -35,6 +35,15 @@ export default {
       const p = url.pathname.replace(/\/+$/, "");
       let res;
       if (p === "/api/health") res = json({ ok: true, time: Date.now() });
+      else if (p === "/api/status") res = json({
+        // 只回報「有沒有設定」，不會透露任何金鑰內容
+        db: !!env.DB,
+        gemini_key: !!env.GEMINI_API_KEY,
+        gemini_model: env.GEMINI_MODEL || "gemini-3.5-flash（預設）",
+        admin_token: adminToken(env) ? (adminToken(env).length >= 16 ? "已設定" : "太短，至少 16 字") : "沒有讀到",
+        allowed_origins: String(env.ALLOWED_ORIGINS || "（沒有設定）"),
+        version: "2026-10-24b",
+      });
       else if (p === "/api/words" && request.method === "GET") res = await listWords(url, env);
       else if (p === "/api/words" && request.method === "POST") res = await submitWord(request, env);
       else if (p === "/api/report" && request.method === "POST") res = await report(request, env);
@@ -95,10 +104,17 @@ async function useQuota(env, key, max) {
   if (n >= max) throw fail("今天的使用次數已達上限，明天再試", 429);
   await env.DB.prepare("INSERT INTO quota (k, day, n) VALUES (?, ?, ?) ON CONFLICT(k) DO UPDATE SET day = excluded.day, n = excluded.n").bind(key, d, n + 1).run();
 }
+function adminToken(env) { return String(env.ADMIN_TOKEN || "").trim(); }
 function isAdmin(request, env) {
-  const t = String(env.ADMIN_TOKEN || "");
-  const h = request.headers.get("Authorization") || "";
-  return t.length >= 16 && h === "Bearer " + t;
+  const t = adminToken(env);
+  const h = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
+  return t.length >= 16 && h === t;
+}
+function requireAdmin(request, env) {
+  const t = adminToken(env);
+  if (!t) throw fail("Worker 沒有讀到 ADMIN_TOKEN：檢查 Cloudflare 變數名稱是否拼對（全大寫），並按 Deploy", 401);
+  if (t.length < 16) throw fail(`Cloudflare 裡的 ADMIN_TOKEN 只有 ${t.length} 個字，至少要 16 個字`, 401);
+  if (!isAdmin(request, env)) throw fail("站長金鑰不正確", 401);
 }
 
 /* ---------- 驗證投稿內容 ---------- */
@@ -252,7 +268,7 @@ async function report(request, env) {
 }
 
 async function adminQueue(request, env) {
-  if (!isAdmin(request, env)) throw fail("站長金鑰不正確", 401);
+  requireAdmin(request, env);
   const pick = r => { const d = JSON.parse(r.data); return { w: r.w, pos: d.pos, m: d.m, note: r.note || "", id: r.id }; };
   const hidden = (await env.DB.prepare("SELECT w, data, note FROM words WHERE status = 'hidden' ORDER BY updated_at DESC LIMIT 200").all()).results.map(pick);
   const pending = (await env.DB.prepare("SELECT w, data, note FROM words WHERE status = 'pending' ORDER BY created_at LIMIT 200").all()).results.map(pick);
@@ -261,7 +277,7 @@ async function adminQueue(request, env) {
 }
 
 async function adminWord(request, env) {
-  if (!isAdmin(request, env)) throw fail("站長金鑰不正確", 401);
+  requireAdmin(request, env);
   const body = await readJson(request);
   const w = str(body.w, 60).toLowerCase();
   const ts = nowTs();
