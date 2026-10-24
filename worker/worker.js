@@ -11,6 +11,8 @@
        GOOGLE_CLIENT_ID Google 登入用的用戶端 ID（xxxx.apps.googleusercontent.com）
        ADMIN_EMAILS     站長的 Gmail，多個用逗號分開
        GEMINI_MODEL     （可省略）預設 gemini-3.5-flash
+   - Workers AI 綁定（建議）：Bindings → Add binding → Workers AI，變數名稱 AI。
+     Gemini 因地區限制（例如被分到香港機房）不能用時，會自動改用 Cloudflare 的 AI 審核。
    需要的資料表會在第一次使用時自動建立。
 
    API：
@@ -37,6 +39,7 @@ const HIDE_AFTER_REPORTS = 3;
 const PAGE = 1000;
 const SESSION_DAYS = 60;
 const MAX_STATE = 900000; // 學習進度最大約 900 KB
+const CF_MODELS = ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/qwen/qwen3-30b-a3b-fp8", "@cf/meta/llama-3.3-70b-instruct-fp8", "@cf/zai-org/glm-4.7-flash"];
 const GEMINI_FALLBACK = ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
 
 export default {
@@ -58,9 +61,10 @@ export default {
         allowed_origins: String(env.ALLOWED_ORIGINS || "（沒有設定）"),
         google_client_id: env.GOOGLE_CLIENT_ID ? "已設定" : "沒有讀到",
         admin_emails: adminEmails(env).length ? `已設定 ${adminEmails(env).length} 個` : "沒有讀到",
+        workers_ai: env.AI ? "已綁定" : "沒有綁定（建議綁定，避免 Gemini 地區限制）",
         ai_model_in_use: (await metaGet(env, "ai_model")) || "（還沒成功審核過）",
         last_ai_error: (await metaGet(env, "ai_error")) || "（沒有）",
-        version: "2026-10-24d",
+        version: "2026-10-24e",
       });
       else if (p === "/api/config") res = json({ google_client_id: String(env.GOOGLE_CLIENT_ID || "").trim() });
       else if (p === "/api/auth/google" && request.method === "POST") res = await authGoogle(request, env);
@@ -197,13 +201,34 @@ async function geminiCall(model, prompt, env, timeoutMs = 25000) {
     return { ok: false, status: 0, ms: Date.now() - t0, text: "", error: e.name === "AbortError" ? "逾時（超過 25 秒）" : String(e.message || e) };
   } finally { clearTimeout(timer); }
 }
+/* Cloudflare Workers AI（不受 Gemini 地區限制） */
+async function cfCall(model, prompt, env, timeoutMs = 25000) {
+  const t0 = Date.now();
+  try {
+    const r = await Promise.race([
+      env.AI.run(model, { messages: [{ role: "user", content: prompt }], max_tokens: 600, temperature: 0 }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error("逾時（超過 25 秒）")), timeoutMs)),
+    ]);
+    let text = r && (typeof r.response === "string" ? r.response : r.response ? JSON.stringify(r.response) : "");
+    if (!text && r && r.choices && r.choices[0]) text = (r.choices[0].message && r.choices[0].message.content) || r.choices[0].text || "";
+    text = String(text || "").replace(/<think>[\s\S]*?<\/think>/g, "");
+    return { ok: !!text, status: text ? 200 : 0, ms: Date.now() - t0, text, error: text ? "" : "沒有回傳內容" };
+  } catch (e) {
+    return { ok: false, status: 0, ms: Date.now() - t0, text: "", error: String(e.message || e).slice(0, 160) };
+  }
+}
+function parseReview(text) {
+  const a = text.indexOf("{"), b = text.lastIndexOf("}");
+  if (a < 0 || b <= a) return null;
+  try { const out = JSON.parse(text.slice(a, b + 1)); return typeof out.approve === "boolean" ? out : null; } catch { return null; }
+}
 function aiModels(env, preferred) {
   const list = [env.GEMINI_MODEL, preferred, ...GEMINI_FALLBACK].map(m => String(m || "").trim()).filter(Boolean);
   return [...new Set(list)];
 }
 async function aiReview(word, env) {
-  if (!env.GEMINI_API_KEY) throw new Error("Worker 沒有讀到 GEMINI_API_KEY");
-  const models = aiModels(env, await metaGet(env, "ai_model"));
+  if (!env.GEMINI_API_KEY && !env.AI) throw new Error("Worker 沒有讀到 GEMINI_API_KEY，也沒有綁定 Workers AI");
+  const models = aiModels(env, "");
   const prompt = `你是英文單字卡的審核員。判斷下面這筆使用者投稿的單字資料能不能放進公開的共有單字庫。
 檢查：
 1. w 是否為真實存在、拼字正確的英文單字或常用片語。
@@ -217,32 +242,50 @@ async function aiReview(word, env) {
 投稿資料：
 ${JSON.stringify(word)}`;
   const errs = [];
-  for (const model of models) {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const r = await geminiCall(model, prompt, env);
-      if (r.ok && r.text) {
-        const a = r.text.indexOf("{"), b = r.text.lastIndexOf("}");
-        let out = null;
-        if (a >= 0 && b > a) { try { out = JSON.parse(r.text.slice(a, b + 1)); } catch {} }
-        if (out && typeof out.approve === "boolean") {
-          await metaSet(env, "ai_model", model);
-          return {
-            approve: out.approve === true,
-            reason: str(out.reason, 60) || (out.approve ? "通過" : "未通過"),
-            cefr: LVS.includes(String(out.cefr || "").toUpperCase()) ? String(out.cefr).toUpperCase() : "",
-            fix: out.fix && typeof out.fix === "object" ? out.fix : {},
-          };
-        }
-        errs.push(`${model}: 回傳格式看不懂`); break;
-      }
-      errs.push(`${model}: ${r.status || ""} ${r.error}`.trim());
-      if ((r.status >= 500 || r.status === 0) && attempt === 0 && r.error.indexOf("逾時") < 0) { await new Promise(res => setTimeout(res, 1200)); continue; }
-      if (r.status === 400 || r.status === 401 || r.status === 403) { await metaSet(env, "ai_error", errs.join("；").slice(0, 400)); throw new Error(errs.join("；")); }
-      break;
+  const pref = (await metaGet(env, "ai_model")) || "";
+  const geoBlocked = Number(await metaGet(env, "gemini_geo")) > Date.now() - 3600000;
+  const done = async (out, label) => {
+    await metaSet(env, "ai_model", label);
+    return {
+      approve: out.approve === true,
+      reason: str(out.reason, 60) || (out.approve ? "通過" : "未通過"),
+      cefr: LVS.includes(String(out.cefr || "").toUpperCase()) ? String(out.cefr).toUpperCase() : "",
+      fix: out.fix && typeof out.fix === "object" ? out.fix : {},
+    };
+  };
+  const tryCf = async () => {
+    if (!env.AI) return null;
+    const list = [...new Set([pref.startsWith("@cf/") ? pref : "", env.WORKERS_AI_MODEL || "", ...CF_MODELS].filter(Boolean))];
+    for (const model of list) {
+      const r = await cfCall(model, prompt, env);
+      const out = r.ok ? parseReview(r.text) : null;
+      if (out) return done(out, model);
+      errs.push(`${model}: ${r.ok ? "回傳格式看不懂" : r.error}`);
     }
+    return null;
+  };
+  // 最近被 Gemini 地區擋過、或上次是 Cloudflare AI 成功的，就先用 Cloudflare AI
+  if (env.AI && (geoBlocked || pref.startsWith("@cf/") || !env.GEMINI_API_KEY)) { const r = await tryCf(); if (r) return r; }
+  if (env.GEMINI_API_KEY) {
+    gem: for (const model of models.filter(m => !m.startsWith("@cf/"))) {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const r = await geminiCall(model, prompt, env);
+        if (r.ok && r.text) {
+          const out = parseReview(r.text);
+          if (out) return done(out, model);
+          errs.push(`${model}: 回傳格式看不懂`); break;
+        }
+        errs.push(`${model}: ${r.status || ""} ${r.error}`.trim());
+        if (/location is not supported/i.test(r.error)) { await metaSet(env, "gemini_geo", Date.now()); break gem; }
+        if ((r.status >= 500 || r.status === 0) && attempt === 0 && r.error.indexOf("逾時") < 0) { await new Promise(res => setTimeout(res, 1200)); continue; }
+        if (r.status === 400 || r.status === 401 || r.status === 403) break gem;
+        break;
+      }
+    }
+    if (env.AI && !(geoBlocked || pref.startsWith("@cf/"))) { const r = await tryCf(); if (r) return r; }
   }
   await metaSet(env, "ai_error", new Date().toISOString().slice(0, 16) + " " + errs.join("；").slice(0, 380));
-  throw new Error(errs.join("；"));
+  throw new Error(errs.join("；") || "沒有可用的 AI（請設定 GEMINI_API_KEY 或綁定 Workers AI）");
 }
 
 async function applyReview(env, word, review, uid, fromPending) {
@@ -324,13 +367,18 @@ async function submission(url, env) {
 async function diag(request, env) {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   await useQuota(env, "diag:" + (await sha(ip + (env.ADMIN_TOKEN || ""))), 10);
-  if (!env.GEMINI_API_KEY) return json({ error: "Worker 沒有讀到 GEMINI_API_KEY" });
+  const p = 'Reply with exactly this JSON and nothing else: {"approve": true}';
   const results = [];
-  for (const model of aiModels(env, await metaGet(env, "ai_model"))) {
-    const r = await geminiCall(model, 'Reply with exactly this JSON and nothing else: {"approve": true}', env, 20000);
-    results.push({ model, ok: r.ok && /approve/.test(r.text), status: r.status, seconds: +(r.ms / 1000).toFixed(1), error: r.error.slice(0, 160) });
+  if (env.GEMINI_API_KEY) for (const model of aiModels(env, "").slice(0, 3)) {
+    const r = await geminiCall(model, p, env, 12000);
+    results.push({ model, ok: r.ok && /approve/.test(r.text), status: r.status, seconds: +(r.ms / 1000).toFixed(1), error: r.error.slice(0, 120) });
+    if (/location is not supported/i.test(r.error)) break;
   }
-  return json({ results });
+  if (env.AI) for (const model of CF_MODELS) {
+    const r = await cfCall(model, p, env, 15000);
+    results.push({ model, ok: r.ok && /approve/.test(r.text), status: r.status, seconds: +(r.ms / 1000).toFixed(1), error: r.error.slice(0, 120) });
+  }
+  return json({ colo: (request.cf && request.cf.colo) || "", results });
 }
 
 async function report(request, env) {

@@ -62,6 +62,13 @@
 2. **Variable name** 一定要填大寫的 `DB`。
 3. 下拉選單選 `volcablearn-db` →「**Add binding**」。
 
+### 4-2. 綁定 Cloudflare AI（建議，避免 Gemini 地區限制）
+
+Worker 會在離使用者最近的機房執行；從台灣連線時常被分到**香港機房**，而 Gemini API 不開放香港使用（錯誤訊息：`User location is not supported`）。綁定 Cloudflare 自己的 AI 後，Gemini 不能用時會自動改用它審核（免費方案每天 10,000 neurons，審核單字很夠用）。
+
+1. Worker 頁面 →「**Bindings**」→「**Add binding**」→ 選「**Workers AI**」→「Add binding」。
+2. **Variable name** 填大寫的 `AI` →「**Add binding**」（或 Deploy）。
+
 ### 5. 設定金鑰和變數
 
 Worker 頁面 →「**Settings**」→「**Variables and Secrets**」→「**Add**」，依序新增：
