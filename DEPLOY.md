@@ -176,6 +176,24 @@ window.VOLCAB_CONFIG = {
 
 ---
 
+## 讓 Cloudflare 從 GitHub 自動部署 Worker（建議）
+
+設定一次之後，`worker/` 資料夾的程式一更新，Cloudflare 就會自動部署，**不用再手動複製貼上 worker.js**。`worker/wrangler.jsonc` 也會讓 Worker 在離 Google Cloud 台灣機房最近的地方執行（`placement.region = gcp:asia-east1`），避免被分到香港機房而被 Gemini 拒絕。
+
+1. Cloudflare →「**Workers & Pages**」→ 點 `volcablearn-api`。
+2. 「**Settings**」→「**Builds**」→「**Connect**」。
+3. 第一次會要求授權 GitHub：選你的帳號 `rjian-collab`，允許存取 `Volcablearn` 這個 repository。
+4. 選擇 repository：`rjian-collab/Volcablearn`，分支（branch）選 `main`。
+5. 建置設定：
+   - **Build command**：留空
+   - **Deploy command**：`npx wrangler deploy`（預設值）
+   - **Root directory（Path）**：`worker`
+6. 按「**Connect**」或「**Save and Deploy**」。之後在「**Deployments**」或「Builds」頁可以看到部署紀錄，顯示成功就完成了。
+
+> `wrangler.jsonc` 設定了 `keep_vars`，部署時會保留你在後台設定的變數與機密；資料庫（DB）和 Cloudflare AI（AI）的綁定也寫在這個檔案裡，不用在後台另外綁。
+
+---
+
 ## 檔案說明
 
 | 檔案 | 用途 | 什麼時候會改它 |

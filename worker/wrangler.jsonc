@@ -1,0 +1,23 @@
+// Volcablearn 共有詞庫 API 的部署設定（Cloudflare 從 GitHub 自動部署時會讀這個檔案）
+{
+  "name": "volcablearn-api",
+  "main": "worker.js",
+  "compatibility_date": "2025-09-01",
+
+  // 保留在 Cloudflare 後台設定的一般變數（ALLOWED_ORIGINS、GOOGLE_CLIENT_ID、ADMIN_EMAILS…）
+  // 機密變數（GEMINI_API_KEY 等）本來就不會被覆蓋
+  "keep_vars": true,
+
+  // 讓 Worker 在離 Google Cloud 台灣機房（彰化）最近的地方執行，避免被分到香港而被 Gemini 拒絕
+  "placement": { "region": "gcp:asia-east1" },
+
+  "d1_databases": [
+    { "binding": "DB", "database_name": "volcablearn-db", "database_id": "f0aed198-534b-4415-8454-5a95637f90f9" }
+  ],
+  "ai": { "binding": "AI" },
+
+  // 每 30 分鐘自動重新審核「AI 暫時無法審核」的字
+  "triggers": { "crons": ["*/30 * * * *"] },
+
+  "observability": { "enabled": true }
+}
