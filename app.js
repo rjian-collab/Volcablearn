@@ -847,13 +847,33 @@ async function shareRecs(list){
     try{const j=await api("/api/words",{method:"POST",body:{uid:myUid(),word:{w:rec.w,pos:rec.pos,m:rec.m,alt:rec.alt,syn:rec.syn,der:rec.der,col:rec.col,ex:rec.ex,topic:rec.topic,cefr:rec.cefr}}});
       rec.share={st:j.result,reason:j.reason||""};
       if(j.word&&j.word.cefr&&!rec.cefr)rec.cefr=j.word.cefr;
-      toast(j.result==="approved"?`「${w}」已加入共有詞庫`:j.result==="exists"?`「${w}」共有詞庫裡已經有了`:j.result==="pending"?`「${w}」排隊等 AI 審核中`:`「${w}」沒有通過審核：${j.reason||""}`);
+      if(j.result==="reviewing"){toast(`「${w}」已加入我的詞庫，AI 正在背景審核`);pollSubmission(w,0);}
+      else toast(j.result==="approved"?`「${w}」已加入共有詞庫`:j.result==="exists"?`「${w}」共有詞庫裡已經有了`:j.result==="pending"?`「${w}」排隊等 AI 審核中`:`「${w}」沒有通過審核：${j.reason||""}`);
     }catch(e){rec.share={st:"error",reason:e.message};}
     save();
   }
   syncShared();render();
 }
-const SHL={sending:"分享中…",approved:"已在共有詞庫",exists:"共有詞庫已有",pending:"等待審核",rejected:"未通過審核",error:"分享失敗",off:"只存在我的詞庫"};
+/* 背景審核：隔幾秒回頭查一次結果 */
+const POLL=[4000,8000,15000,30000,60000];
+function pollSubmission(w,i){
+  if(i>=POLL.length)return;
+  setTimeout(async()=>{
+    const rec=(S.custom||[]).find(x=>x.w===w);if(!rec||!apiOn())return;
+    try{
+      const j=await api("/api/submission?w="+encodeURIComponent(w));
+      if(j.status==="reviewing"){pollSubmission(w,i+1);return;}
+      const st=j.status==="approved"?"approved":j.status==="rejected"?"rejected":j.status==="pending"?"pending":rec.share&&rec.share.st;
+      rec.share={st,reason:j.reason||""};if(j.cefr&&!rec.cefr)rec.cefr=j.cefr;save();
+      if(st==="approved"){toast(`「${w}」通過 AI 審核，已加入共有詞庫`);syncShared();}
+      else if(st==="rejected")toast(`「${w}」沒有通過 AI 審核：${j.reason||""}`);
+      else if(st==="pending")toast(`「${w}」AI 暫時無法審核，稍後會自動再試`);
+      if(mode==="library"||mode==="add")render();
+    }catch(e){pollSubmission(w,i+1);}
+  },POLL[i]);
+}
+function resumePolls(){(S.custom||[]).forEach(r=>{if(r.share&&(r.share.st==="reviewing"||r.share.st==="pending"||r.share.st==="sending"))pollSubmission(r.w,0);});}
+const SHL={reviewing:"AI 審核中…",sending:"分享中…",approved:"已在共有詞庫",exists:"共有詞庫已有",pending:"等待審核",rejected:"未通過審核",error:"分享失敗",off:"只存在我的詞庫"};
 
 /* ---------- Google 帳號登入與跨裝置同步 ---------- */
 const SESSK="volcab.session";
@@ -1385,7 +1405,7 @@ document.addEventListener("keydown",e=>{
 /* 測試用介面 */
 window.WB={mergeState,get session(){return session;},acctPull,get sess(){return sess;},get pt(){return pt;},get lib(){return lib;},myLevel,lvOf,pool,levelOf,streak,parseAI,normAI,buildPrompt,get drafts(){return drafts;},grade,flip,get again(){return again;},get S(){return S;},applySRS,todayQueue,today,addDays,diffDays,ivFromS,nextS,retention,curR,words,makeQ,distractors,setOffset:n=>{S.settings.offset=n;save();},render,setMode,submit,get cur(){return cur;}};
 load();render();
-loadShared();loadSession();bump();initCloud();initSample();syncShared();initGoogle();if(session)acctPull(false);
+loadShared();loadSession();bump();initCloud();initSample();syncShared();initGoogle();if(apiOn())resumePolls();if(session)acctPull(false);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&session&&Date.now()-acctLast>60000)acctPull(false);});setInterval(()=>{if(!document.hidden)syncShared();},10*60*1000);
 if("serviceWorker" in navigator&&!CL()&&/github\.io$|^localhost$|^127\./.test(location.hostname)){const had=!!navigator.serviceWorker.controller;let reloaded=false;
   navigator.serviceWorker.register("sw.js",{updateViaCache:"none"}).then(r=>r.update()).catch(()=>{});

@@ -26,6 +26,8 @@
    POST /api/auth/logout            登出
    GET  /api/sync / PUT /api/sync   下載／上傳學習進度
    POST /api/account/delete         刪除雲端上的個人資料
+   GET  /api/submission?w=單字       查詢投稿的審核結果
+   GET  /api/diag                   測試每個 Gemini 模型能不能用、要多久（每天限 10 次）
    ========================================================= */
 
 const LVS = ["A1", "A2", "B1", "B2", "C1", "C2"];
@@ -56,7 +58,9 @@ export default {
         allowed_origins: String(env.ALLOWED_ORIGINS || "（沒有設定）"),
         google_client_id: env.GOOGLE_CLIENT_ID ? "已設定" : "沒有讀到",
         admin_emails: adminEmails(env).length ? `已設定 ${adminEmails(env).length} 個` : "沒有讀到",
-        version: "2026-10-24c",
+        ai_model_in_use: (await metaGet(env, "ai_model")) || "（還沒成功審核過）",
+        last_ai_error: (await metaGet(env, "ai_error")) || "（沒有）",
+        version: "2026-10-24d",
       });
       else if (p === "/api/config") res = json({ google_client_id: String(env.GOOGLE_CLIENT_ID || "").trim() });
       else if (p === "/api/auth/google" && request.method === "POST") res = await authGoogle(request, env);
@@ -66,7 +70,9 @@ export default {
       else if (p === "/api/sync" && request.method === "PUT") res = await syncPut(request, env);
       else if (p === "/api/account/delete" && request.method === "POST") res = await accountDelete(request, env);
       else if (p === "/api/words" && request.method === "GET") res = await listWords(url, env);
-      else if (p === "/api/words" && request.method === "POST") res = await submitWord(request, env);
+      else if (p === "/api/words" && request.method === "POST") res = await submitWord(request, env, ctx);
+      else if (p === "/api/submission" && request.method === "GET") res = await submission(url, env);
+      else if (p === "/api/diag" && request.method === "GET") res = await diag(request, env);
       else if (p === "/api/report" && request.method === "POST") res = await report(request, env);
       else if (p === "/api/admin/queue" && request.method === "GET") res = await adminQueue(request, env);
       else if (p === "/api/admin/word" && request.method === "POST") res = await adminWord(request, env);
@@ -83,6 +89,7 @@ export default {
 
   // 選用：在 Cloudflare 設定 Cron Trigger（例如每 30 分鐘），自動重審「等待審核」的字
   async scheduled(event, env, ctx) {
+    await ensureTables(env);
     const { results } = await env.DB.prepare("SELECT w, data, created_by FROM words WHERE status = 'pending' ORDER BY created_at LIMIT 10").all();
     for (const r of results) {
       const word = JSON.parse(r.data);
@@ -172,10 +179,31 @@ function cleanWord(o) {
 }
 
 /* ---------- AI 審核（Gemini） ---------- */
+/* 呼叫一次 Gemini；逾時 25 秒就放棄 */
+async function geminiCall(model, prompt, env, timeoutMs = 25000) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  const t0 = Date.now();
+  try {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST", signal: ac.signal,
+      headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0 } }),
+    });
+    const j = await r.json().catch(() => ({}));
+    const text = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map(p => p.text || "").join("");
+    return { ok: r.ok, status: r.status, ms: Date.now() - t0, text, error: r.ok ? (text ? "" : "沒有回傳內容" + (j.promptFeedback && j.promptFeedback.blockReason ? `（${j.promptFeedback.blockReason}）` : "")) : ((j.error && j.error.message) || "HTTP " + r.status) };
+  } catch (e) {
+    return { ok: false, status: 0, ms: Date.now() - t0, text: "", error: e.name === "AbortError" ? "逾時（超過 25 秒）" : String(e.message || e) };
+  } finally { clearTimeout(timer); }
+}
+function aiModels(env, preferred) {
+  const list = [env.GEMINI_MODEL, preferred, ...GEMINI_FALLBACK].map(m => String(m || "").trim()).filter(Boolean);
+  return [...new Set(list)];
+}
 async function aiReview(word, env) {
-  if (!env.GEMINI_API_KEY) throw new Error("no key");
-  const first = env.GEMINI_MODEL || "gemini-3.5-flash";
-  const models = [first, ...GEMINI_FALLBACK.filter(m => m !== first)];
+  if (!env.GEMINI_API_KEY) throw new Error("Worker 沒有讀到 GEMINI_API_KEY");
+  const models = aiModels(env, await metaGet(env, "ai_model"));
   const prompt = `你是英文單字卡的審核員。判斷下面這筆使用者投稿的單字資料能不能放進公開的共有單字庫。
 檢查：
 1. w 是否為真實存在、拼字正確的英文單字或常用片語。
@@ -188,33 +216,33 @@ async function aiReview(word, env) {
 {"approve": true 或 false, "reason": "繁體中文，20 字以內", "cefr": "A1、A2、B1、B2、C1、C2 其中之一", "fix": {"m": "需要修正時才填", "pos": "需要修正時才填", "ex": "需要修正時才填，目標字用大括號標出"}}
 投稿資料：
 ${JSON.stringify(word)}`;
-  // 模型忙碌（5xx）時重試一次；還是不行、額度用完（429）或找不到模型（404）就換下一個模型
-  let r = null;
-  outer: for (const model of models) {
+  const errs = [];
+  for (const model of models) {
     for (let attempt = 0; attempt < 2; attempt++) {
-      r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
-        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0 } }),
-      });
-      if (r.ok) break outer;
-      if (r.status >= 500 && attempt === 0) { await new Promise(res => setTimeout(res, 1500)); continue; }
-      if (r.status >= 500 || r.status === 429 || r.status === 404) break;
-      break outer;
+      const r = await geminiCall(model, prompt, env);
+      if (r.ok && r.text) {
+        const a = r.text.indexOf("{"), b = r.text.lastIndexOf("}");
+        let out = null;
+        if (a >= 0 && b > a) { try { out = JSON.parse(r.text.slice(a, b + 1)); } catch {} }
+        if (out && typeof out.approve === "boolean") {
+          await metaSet(env, "ai_model", model);
+          return {
+            approve: out.approve === true,
+            reason: str(out.reason, 60) || (out.approve ? "通過" : "未通過"),
+            cefr: LVS.includes(String(out.cefr || "").toUpperCase()) ? String(out.cefr).toUpperCase() : "",
+            fix: out.fix && typeof out.fix === "object" ? out.fix : {},
+          };
+        }
+        errs.push(`${model}: 回傳格式看不懂`); break;
+      }
+      errs.push(`${model}: ${r.status || ""} ${r.error}`.trim());
+      if ((r.status >= 500 || r.status === 0) && attempt === 0 && r.error.indexOf("逾時") < 0) { await new Promise(res => setTimeout(res, 1200)); continue; }
+      if (r.status === 400 || r.status === 401 || r.status === 403) { await metaSet(env, "ai_error", errs.join("；").slice(0, 400)); throw new Error(errs.join("；")); }
+      break;
     }
   }
-  if (!r || !r.ok) throw new Error("gemini " + (r ? r.status : "no response"));
-  const j = await r.json();
-  const text = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map(p => p.text || "").join("");
-  const a = text.indexOf("{"), b = text.lastIndexOf("}");
-  if (a < 0 || b < a) throw new Error("bad ai output");
-  const out = JSON.parse(text.slice(a, b + 1));
-  return {
-    approve: out.approve === true,
-    reason: str(out.reason, 60) || (out.approve ? "通過" : "未通過"),
-    cefr: LVS.includes(String(out.cefr || "").toUpperCase()) ? String(out.cefr).toUpperCase() : "",
-    fix: out.fix && typeof out.fix === "object" ? out.fix : {},
-  };
+  await metaSet(env, "ai_error", new Date().toISOString().slice(0, 16) + " " + errs.join("；").slice(0, 380));
+  throw new Error(errs.join("；"));
 }
 
 async function applyReview(env, word, review, uid, fromPending) {
@@ -252,7 +280,7 @@ async function listWords(url, env) {
   return json({ words, next, more });
 }
 
-async function submitWord(request, env) {
+async function submitWord(request, env, ctx) {
   const body = await readJson(request);
   const sess = await sessionOf(request, env);
   const uid = sess ? sess.uid : (str(body.uid, 40) || "anon");
@@ -264,18 +292,45 @@ async function submitWord(request, env) {
   const ip = request.headers.get("CF-Connecting-IP") || "unknown";
   await useQuota(env, "u:" + uid, LIMITS.submitPerUser);
   await useQuota(env, "ip:" + (await sha(ip + (env.ADMIN_TOKEN || ""))), LIMITS.submitPerIp);
-  let review;
+  const ts = nowTs();
+  await env.DB.prepare(
+    "INSERT INTO words (w, data, cefr, status, reports, created_by, created_at, updated_at, note) VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, 'AI 審核中') " +
+    "ON CONFLICT(w) DO UPDATE SET data = excluded.data, status = 'pending', updated_at = excluded.updated_at, note = 'AI 審核中'"
+  ).bind(word.w, JSON.stringify(word), word.cefr || null, uid, ts, ts).run();
+  // 先回應使用者，AI 在背景審核（不用等）
+  const job = reviewNow(env, word, uid);
+  if (ctx && ctx.waitUntil) { ctx.waitUntil(job); return json({ result: "reviewing", reason: "AI 審核中" }); }
+  return json(await job);
+}
+async function reviewNow(env, word, uid) {
   try {
-    review = await aiReview(word, env);
+    const review = await aiReview(word, env);
+    return await applyReview(env, word, review, uid, true);
   } catch (e) {
-    const ts = nowTs();
-    await env.DB.prepare(
-      "INSERT INTO words (w, data, cefr, status, reports, created_by, created_at, updated_at, note) VALUES (?, ?, ?, 'pending', 0, ?, ?, ?, 'AI 暫時無法審核') " +
-      "ON CONFLICT(w) DO UPDATE SET data = excluded.data, status = 'pending', updated_at = excluded.updated_at"
-    ).bind(word.w, JSON.stringify(word), word.cefr || null, uid, ts, ts).run();
-    return json({ result: "pending", reason: "AI 暫時無法審核，稍後會再處理" });
+    await env.DB.prepare("UPDATE words SET note = ? WHERE w = ? AND status = 'pending'").bind("AI 暫時無法審核：" + String(e.message || e).slice(0, 150), word.w).run();
+    return { result: "pending", reason: "AI 暫時無法審核，稍後會再處理" };
   }
-  return json(await applyReview(env, word, review, uid, false));
+}
+async function submission(url, env) {
+  const w = str(url.searchParams.get("w"), 60).toLowerCase();
+  const row = await env.DB.prepare("SELECT status, note, cefr FROM words WHERE w = ?").bind(w).first();
+  if (row && row.status === "approved") return json({ status: "approved", reason: String(row.note || "").replace(/^AI：/, ""), cefr: row.cefr || "" });
+  if (row && row.status === "pending") return json({ status: /無法/.test(row.note || "") ? "pending" : "reviewing", reason: row.note || "" });
+  const rj = await env.DB.prepare("SELECT reason FROM rejected WHERE w = ? ORDER BY created_at DESC LIMIT 1").bind(w).first();
+  if (rj) return json({ status: "rejected", reason: rj.reason || "" });
+  if (row) return json({ status: row.status, reason: row.note || "" });
+  return json({ status: "none" });
+}
+async function diag(request, env) {
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  await useQuota(env, "diag:" + (await sha(ip + (env.ADMIN_TOKEN || ""))), 10);
+  if (!env.GEMINI_API_KEY) return json({ error: "Worker 沒有讀到 GEMINI_API_KEY" });
+  const results = [];
+  for (const model of aiModels(env, await metaGet(env, "ai_model"))) {
+    const r = await geminiCall(model, 'Reply with exactly this JSON and nothing else: {"approve": true}', env, 20000);
+    results.push({ model, ok: r.ok && /approve/.test(r.text), status: r.status, seconds: +(r.ms / 1000).toFixed(1), error: r.error.slice(0, 160) });
+  }
+  return json({ results });
 }
 
 async function report(request, env) {
@@ -356,6 +411,7 @@ async function ensureTables(env) {
     "CREATE TABLE IF NOT EXISTS quota (k TEXT PRIMARY KEY, day TEXT NOT NULL, n INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, uid TEXT NOT NULL, email TEXT, name TEXT, created_at INTEGER, expires_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS user_state (uid TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)",
   ];
   for (const s of sql) await env.DB.prepare(s).run();
   tablesReady = true;
@@ -460,3 +516,6 @@ async function accountDelete(request, env) {
   await env.DB.prepare("DELETE FROM sessions WHERE uid = ?").bind(s.uid).run();
   return json({ ok: true });
 }
+
+async function metaGet(env, k) { try { const r = await env.DB.prepare("SELECT v FROM meta WHERE k = ?").bind(k).first(); return r ? r.v : ""; } catch { return ""; } }
+async function metaSet(env, k, v) { try { await env.DB.prepare("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(k, String(v)).run(); } catch {} }
