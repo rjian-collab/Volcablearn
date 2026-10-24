@@ -24,6 +24,7 @@ const POS = ["n", "v", "adj", "adv", "ph", "prefix"];
 const LIMITS = { submitPerUser: 30, submitPerIp: 100, reportPerUser: 50 };
 const HIDE_AFTER_REPORTS = 3;
 const PAGE = 1000;
+const GEMINI_FALLBACK = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
 
 export default {
   async fetch(request, env, ctx) {
@@ -128,7 +129,8 @@ function cleanWord(o) {
 /* ---------- AI 審核（Gemini） ---------- */
 async function aiReview(word, env) {
   if (!env.GEMINI_API_KEY) throw new Error("no key");
-  const model = env.GEMINI_MODEL || "gemini-3.8-flash";
+  const first = env.GEMINI_MODEL || "gemini-3.8-flash";
+  const models = [first, ...GEMINI_FALLBACK.filter(m => m !== first)];
   const prompt = `你是英文單字卡的審核員。判斷下面這筆使用者投稿的單字資料能不能放進公開的共有單字庫。
 檢查：
 1. w 是否為真實存在、拼字正確的英文單字或常用片語。
@@ -141,12 +143,22 @@ async function aiReview(word, env) {
 {"approve": true 或 false, "reason": "繁體中文，20 字以內", "cefr": "A1、A2、B1、B2、C1、C2 其中之一", "fix": {"m": "需要修正時才填", "pos": "需要修正時才填", "ex": "需要修正時才填，目標字用大括號標出"}}
 投稿資料：
 ${JSON.stringify(word)}`;
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
-    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0 } }),
-  });
-  if (!r.ok) throw new Error("gemini " + r.status);
+  // 模型忙碌（5xx）時重試一次；還是不行、額度用完（429）或找不到模型（404）就換下一個模型
+  let r = null;
+  outer: for (const model of models) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0 } }),
+      });
+      if (r.ok) break outer;
+      if (r.status >= 500 && attempt === 0) { await new Promise(res => setTimeout(res, 1500)); continue; }
+      if (r.status >= 500 || r.status === 429 || r.status === 404) break;
+      break outer;
+    }
+  }
+  if (!r || !r.ok) throw new Error("gemini " + (r ? r.status : "no response"));
   const j = await r.json();
   const text = ((j.candidates && j.candidates[0] && j.candidates[0].content && j.candidates[0].content.parts) || []).map(p => p.text || "").join("");
   const a = text.indexOf("{"), b = text.lastIndexOf("}");

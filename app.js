@@ -932,20 +932,38 @@ async function callAI(prompt){
       throw new Error(code==="not_granted"?"你沒有允許這個網頁使用 Claude。重新整理後再按一次，並在詢問視窗按允許。":code==="rate_limited"?"使用太頻繁了，請等一下再試。":code==="empty"?"Claude 沒有回傳內容，請再試一次。":"Claude 產生失敗："+((e&&e.message)||"未知錯誤"));}
   }
   const c=aiCfg();if(!c.key)throw new Error("還沒設定 API 金鑰，請到「設定」貼上。");
-  const model=(c.model||AIDEF[c.provider]).trim();let r,j;
-  try{
-    if(c.provider==="gemini"){
-      r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":c.key},body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{temperature:0.4}})});
-    }else{
-      r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":c.key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model,max_tokens:8000,messages:[{role:"user",content:prompt}]})});
+  /* 模型忙碌（503/500）時自動重試一次；還是不行、額度用完（429）或找不到模型（404）時，自動換下一個模型 */
+  const first=(c.model||AIDEF[c.provider]).trim();
+  const models=c.provider==="gemini"?[first,...GEMINI_FALLBACK.filter(m=>m!==first)]:[first];
+  const wait=ms=>new Promise(r=>setTimeout(r,ms));
+  let lastErr=null;
+  for(const model of models){
+    for(let attempt=0;attempt<2;attempt++){
+      let r,j;
+      try{
+        if(c.provider==="gemini"){
+          r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{method:"POST",headers:{"Content-Type":"application/json","x-goog-api-key":c.key},body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{temperature:0.4}})});
+        }else{
+          r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"content-type":"application/json","x-api-key":c.key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model,max_tokens:8000,messages:[{role:"user",content:prompt}]})});
+        }
+      }catch(e){throw new Error("連不上 AI 服務，請檢查網路。（"+e.message+"）");}
+      j=await r.json().catch(()=>({}));
+      if(r.ok){
+        const txt=c.provider==="gemini"?((j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts)||[]).map(p=>p.text||"").join(""):(j.content||[]).map(b=>b.text||"").join("");
+        if(txt)return txt;
+        lastErr=new Error("AI 沒有回傳內容，請再試一次。");break;
+      }
+      lastErr=new Error(aiErr(r.status,j.error&&j.error.message));
+      if(r.status===503||r.status===500||r.status===529){if(attempt===0){addMsgBusy(`${model} 忙碌中，自動重試…`);await wait(2000);continue;}break;}
+      if(r.status===429||r.status===404)break;
+      throw lastErr;
     }
-  }catch(e){throw new Error("連不上 AI 服務，請檢查網路。（"+e.message+"）");}
-  j=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(aiErr(r.status,j.error&&j.error.message));
-  const txt=c.provider==="gemini"?((j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts)||[]).map(p=>p.text||"").join(""):(j.content||[]).map(b=>b.text||"").join("");
-  if(!txt)throw new Error("AI 沒有回傳內容，請再試一次。");
-  return txt;
+    if(models.length>1)addMsgBusy("改用其他模型再試…");
+  }
+  throw lastErr||new Error("AI 暫時無法使用，請稍後再試。");
 }
+const GEMINI_FALLBACK=["gemini-3.8-flash","gemini-3.6-flash","gemini-3.5-flash-lite","gemini-3.1-flash-lite"];
+function addMsgBusy(m){if(addBusy&&mode==="add"){addMsg=m;render();}}
 function buildPrompt(list){
   const topics=[...new Set(words().map(w=>w.topic))];
   return `你是幫台灣學生製作英文單字閃卡的助手。請為下列每個英文單字或片語各產生一筆資料，只輸出一個 JSON 陣列，不要輸出其他文字或 Markdown。
