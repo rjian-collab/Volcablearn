@@ -110,6 +110,65 @@ window.VOLCAB_CONFIG = {
 
 ---
 
+## 開啟 Google 登入（跨裝置同步＋站長身分）
+
+做完之後，使用者可以用 Google 帳號登入，學習進度、我的詞庫、XP 與成就會自動同步到雲端；用站長的 Gmail 登入就會自動成為站長，不用再輸入站長金鑰。需要的資料表 Worker 會自己建立，**不用再貼 SQL**。
+
+### 1. 在 Google Cloud 建立「登入用的用戶端 ID」（免費）
+
+1. 打開 [Google Cloud Console](https://console.cloud.google.com/)，用你的 Google 帳號登入。
+2. 上方的專案選單 →「**新增專案**」，名稱填 `Volcablearn` →「**建立**」，並確認上方已切換到這個專案。
+3. 左上選單（☰）→「**API 和服務**」→「**OAuth 同意畫面**」（新版叫 **Google Auth Platform**），按「**開始**」：
+   - 應用程式名稱：`Volcablearn`
+   - 使用者支援電子郵件：選你的 Gmail
+   - 目標對象（Audience）：選「**外部**」
+   - 聯絡資訊：填你的 Gmail → 同意政策 →「**建立**」
+4. 到「**目標對象**（Audience）」頁，按「**發布應用程式**」（Publish app）→ 確認。
+   不發布的話，只有你手動加入的「測試使用者」能登入。
+5. 到「**品牌**（Branding）」頁（選填，但建議）：
+   - 應用程式首頁：`https://rjian-collab.github.io/Volcablearn/`
+   - 隱私權政策連結：`https://rjian-collab.github.io/Volcablearn/privacy.html`
+   - 按「**儲存**」。
+6. 到「**用戶端**（Clients）」頁 →「**建立用戶端**」：
+   - 應用程式類型：「**網頁應用程式**」
+   - 名稱：`Volcablearn web`
+   - 「**已授權的 JavaScript 來源**」→「新增 URI」，填 `https://rjian-collab.github.io`（**不要**加 `/Volcablearn`，結尾也不要斜線）
+   - 「已授權的重新導向 URI」留空
+   - 按「**建立**」
+7. 畫面會顯示「**用戶端 ID**」（結尾是 `.apps.googleusercontent.com`），複製下來。
+   用戶端密碼（Client secret）**用不到**，不用管它。
+
+> 這個網站只要求基本登入資訊（姓名、Email），屬於不需要 Google 審查的權限。登入畫面若出現「應用程式未經驗證」之類的提示，可以在「品牌」頁送出品牌驗證（需在 Google Search Console 驗證網站，通常 2～3 個工作天）。
+
+### 2. 在 Cloudflare 設定
+
+1. **更新 Worker 程式**：Worker →「Edit code」→ 全部刪掉，貼上本專案最新的 `worker/worker.js` →「**Deploy**」。
+2. **新增兩個變數**：Worker →「Settings」→「Variables and Secrets」→「Add」：
+
+| Key | Value | Secret |
+|---|---|---|
+| `GOOGLE_CLIENT_ID` | 剛才複製的用戶端 ID | 不勾 |
+| `ADMIN_EMAILS` | 你的 Gmail（多個用逗號分開） | 不勾 |
+
+   按「**Deploy**」。原本的 `ADMIN_TOKEN` 可以留著或刪掉都沒關係。
+
+3. **檢查**：打開 `https://volcablearn-api.rjian.workers.dev/api/status`，看到
+   `"google_client_id":"已設定"`、`"admin_emails":"已設定 1 個"` 就對了。
+
+### 3. 在網站登入
+
+網站按 `Ctrl + F5` →「**設定**」→「帳號與跨裝置同步」→ 按「**用 Google 帳號登入**」。
+用 `ADMIN_EMAILS` 裡的帳號登入，名字旁邊會出現「站長」標籤，「詞庫 → 共有詞庫」最上方就會有站長管理。
+
+### 同步怎麼運作
+
+- 登入後每次作答都會自動上傳（等 2 秒合併成一次）；打開網站、或從其他分頁切回來時會自動下載。
+- 第一次登入時，這台裝置的進度會和雲端的進度**合併**：每個字取最近一次作答的紀錄；收藏、成就取聯集；設定用較新的那份。
+- 同一天在兩台裝置都拿到 XP 時，該日 XP 取較高的那台（不會重複計算）。
+- 登出不會清除這台裝置上的進度；「刪除雲端進度」會永久刪除伺服器上的資料。
+
+---
+
 ## 檔案說明
 
 | 檔案 | 用途 | 什麼時候會改它 |
@@ -124,6 +183,7 @@ window.VOLCAB_CONFIG = {
 | `config.js` | 共有詞庫伺服器網址（站長填） | 啟用共有詞庫時 |
 | `cefr.js` | CEFR 單字等級表（估計單字難度、分級測驗） | 幾乎不用改 |
 | `worker/` | Cloudflare 後端程式與資料表 | 啟用或修改共有詞庫時 |
+| `privacy.html` | 隱私權政策（Google 登入需要） | 資料用途改變時 |
 | `og-image.png` | 分享到 Threads 等社群時顯示的預覽圖 | 想換預覽圖時 |
 
 ### 自己複製貼上建立檔案

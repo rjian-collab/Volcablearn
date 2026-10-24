@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Volcablearn 隱私權政策</title>
+<style>
+:root{--bg:#f3f4f6;--card:#fff;--fg:#1f2937;--mute:#6b7280;--pri:#4f46e5;--line:#e5e7eb}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#1a1d24;--fg:#e5e7eb;--mute:#9ca3af;--pri:#818cf8;--line:#2a2f3a;color-scheme:dark}}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:"Segoe UI","Microsoft JhengHei","PingFang TC","Noto Sans TC",system-ui,sans-serif;line-height:1.75}
+main{max-width:720px;margin:0 auto;padding:24px 16px 64px}
+article{background:var(--card);border-radius:18px;padding:24px 26px;box-shadow:0 10px 30px rgba(17,24,39,.06)}
+h1{font-size:24px;margin:0 0 4px}h2{font-size:17px;margin:1.6em 0 .4em}
+p,li{font-size:15px}.mute{color:var(--mute);font-size:14px}a{color:var(--pri)}
+table{border-collapse:collapse;width:100%;font-size:14px}td,th{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left;vertical-align:top}
+.wrap{overflow-x:auto}
+</style>
+</head>
+<body>
+<main>
+<article>
+<h1>Volcablearn 隱私權政策</h1>
+<p class="mute">最後更新：2026 年 10 月 24 日</p>
+
+<p>Volcablearn 是一個免費的英文單字閃卡網站（<a href="https://rjian-collab.github.io/Volcablearn/">rjian-collab.github.io/Volcablearn</a>），由個人站長維護。這一頁說明網站會蒐集哪些資料、拿來做什麼，以及你可以怎麼刪除它們。</p>
+
+<h2>不登入時</h2>
+<ul>
+  <li>學習進度、你新增的單字、設定都只存在<strong>你自己的瀏覽器</strong>裡，不會上傳。</li>
+  <li>你在「新增」頁投稿到共有詞庫的單字內容（英文、中文意思、例句等）會送到網站伺服器審核，通過後公開給所有使用者。投稿不會附上你的姓名或 Email，只會附上一組瀏覽器隨機產生的匿名代號，用來限制每天的投稿次數。</li>
+  <li>你自己填的 AI API 金鑰只存在你的瀏覽器，不會送到網站伺服器。</li>
+</ul>
+
+<h2>用 Google 帳號登入時</h2>
+<div class="wrap"><table>
+  <tr><th>資料</th><th>用途</th></tr>
+  <tr><td>Google 帳號的使用者編號</td><td>辨識你的帳號，讓不同裝置能讀到同一份進度</td></tr>
+  <tr><td>Email、顯示名稱</td><td>在設定頁顯示你登入的是哪個帳號；判斷是否為站長</td></tr>
+  <tr><td>學習進度（每個字的複習紀錄、你的詞庫、XP、成就、設定）</td><td>跨裝置同步</td></tr>
+</table></div>
+<p>網站只向 Google 要求基本的登入資訊（openid、email、profile），不會讀取你的 Gmail、雲端硬碟或其他任何 Google 資料，也不會取得你的 Google 密碼。</p>
+
+<h2>資料存放與第三方服務</h2>
+<ul>
+  <li><strong>Cloudflare</strong>：網站伺服器與資料庫（Cloudflare Workers、D1）存放共有詞庫、登入狀態與同步的學習進度。</li>
+  <li><strong>Google</strong>：提供「用 Google 登入」；投稿到共有詞庫的單字內容會送到 Google Gemini 做 AI 內容審核。</li>
+  <li><strong>GitHub Pages</strong>：提供網頁本身。</li>
+</ul>
+<p>網站不放廣告、不做追蹤分析，也不會把你的資料賣給或分享給其他人。伺服器為了限制濫用，會把連線 IP 經過雜湊處理後計算每日使用次數，不會保存原始 IP。</p>
+
+<h2>保存期間與刪除</h2>
+<ul>
+  <li>登入狀態在 60 天沒有使用後失效。</li>
+  <li>你可以隨時在網站「設定 → 帳號與跨裝置同步」按「<strong>刪除雲端進度</strong>」，伺服器上你的學習進度與登入紀錄會立即刪除（這台裝置上的進度仍保留）。</li>
+  <li>已經公開到共有詞庫的單字屬於公共內容，不會跟著帳號刪除；如需移除，請聯絡站長。</li>
+  <li>清除瀏覽器的網站資料，就會刪除存在瀏覽器裡的進度。</li>
+</ul>
+
+<h2>未成年使用者</h2>
+<p>使用 Google 帳號登入須符合 Google 對帳號使用者的年齡規定。若你未滿 18 歲，建議在家長或監護人知情的情況下使用登入同步功能。</p>
+
+<h2>聯絡我們</h2>
+<p>對隱私權有任何問題，或想刪除共有詞庫中的內容，請到 <a href="https://github.com/rjian-collab/Volcablearn/issues">GitHub Issues</a> 留言。</p>
+
+<p class="mute"><a href="./">← 回到 Volcablearn</a></p>
+</article>
+</main>
+</body>
+</html>

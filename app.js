@@ -17,9 +17,9 @@ function fromData(d){
   const st=Object.assign(clone(DEF),d.settings||{});
   st.types=Object.assign(clone(DEF.types),(d.settings||{}).types||{});
   st.slow=Object.assign(clone(DEF.slow),(d.settings||{}).slow||{});
-  return {settings:st,prog:d.prog||{},log:d.log||{},modeStats:d.modeStats||{},overrides:d.overrides||{},reviewed:d.reviewed||{},custom:Array.isArray(d.custom)?d.custom:[],savedAt:d.savedAt||0,xp:d.xp&&typeof d.xp==="object"?{total:+d.xp.total||0,days:d.xp.days||{}}:{total:0,days:{}},badges:d.badges||{},best:d.best||{combo:0},lv:Object.assign({theta:null,src:"",hist:{},test:null,skip:false},d.lv||{}),collect:d.collect||{},hidden:d.hidden||{}};
+  return {settings:st,prog:d.prog||{},log:d.log||{},modeStats:d.modeStats||{},overrides:d.overrides||{},reviewed:d.reviewed||{},custom:Array.isArray(d.custom)?d.custom:[],savedAt:d.savedAt||0,xp:d.xp&&typeof d.xp==="object"?{total:+d.xp.total||0,days:d.xp.days||{}}:{total:0,days:{}},badges:d.badges||{},best:d.best||{combo:0},lv:Object.assign({theta:null,src:"",hist:{},test:null,skip:false},d.lv||{}),collect:d.collect||{},hidden:d.hidden||{},tomb:d.tomb||{}};
 }
-function save(){bump();S.savedAt=Date.now();try{localStorage.setItem(KEY,JSON.stringify(S));storageOk=true;}catch(e){storageOk=false;}pushCloud();}
+function save(){bump();S.savedAt=Date.now();try{localStorage.setItem(KEY,JSON.stringify(S));storageOk=true;}catch(e){storageOk=false;}pushCloud();acctPush();}
 /* 雲端同步（只在 claude.ai 上開啟時可用；其他地方只存瀏覽器） */
 let cloud=null,cloudState="off",cloudTimer=null;
 const CL=()=>(typeof window!=="undefined"&&window.claude&&typeof window.claude.use==="function")?window.claude:null;
@@ -352,7 +352,7 @@ function checkBadges(got){
 }
 function hud(){
   const st=streak(),x=xpToday(),g=goal(),lv=levelOf(S.xp.total||0);
-  return `<div class="hud"><span class="hs${st?" on":""}" title="連續學習天數">🔥 ${st}</span><span class="hx" title="今日 XP / 每日目標"><span class="hbar"><i style="width:${Math.min(100,Math.round(x/g*100))}%"></i></span><b>${x}</b>/${g} XP</span><span class="hl" title="等級，下一級還差 ${lv.need-lv.into} XP">Lv ${lv.lv}</span></div>`;
+  return `<div class="hud"><span class="hs${st?" on":""}" title="連續學習天數">🔥 ${st}</span><span class="hx" title="今日 XP / 每日目標"><span class="hbar"><i style="width:${Math.min(100,Math.round(x/g*100))}%"></i></span><b>${x}</b>/${g} XP</span><span class="hl" title="等級，下一級還差 ${lv.need-lv.into} XP">Lv ${lv.lv}</span>${acctChip()}</div>`;
 }
 function toast(msg){
   toasts.push(msg);const box=document.getElementById("toasts");if(!box)return;
@@ -395,7 +395,7 @@ function linkGroup(src,neww){
   if(!src.grp){S.overrides[src.w]=Object.assign({},S.overrides[src.w]||{},{grp:g});}
   return g;
 }
-function newRec(o){const r=Object.assign({alt:"",syn:[],der:[],col:[],ex:"",topic:"自訂",grp:"",custom:true,src:"mine",addedAt:today()},o);if(!r.cefr)r.cefr=lookupLv(r.w)||"";return r;}
+function newRec(o){const r=Object.assign({addedTs:Date.now(),alt:"",syn:[],der:[],col:[],ex:"",topic:"自訂",grp:"",custom:true,src:"mine",addedAt:today()},o);if(!r.cefr)r.cefr=lookupLv(r.w)||"";return r;}
 async function addExt(code,srcW){
   const [k,iS]=code.split(":"),i=+iS,src=byW(srcW);if(!src)return;
   if(k==="der"){const d=src.der[i];const w=d[0].toLowerCase();if(inBank(w))return toast("已經在題庫裡了");
@@ -637,6 +637,7 @@ function render(){
   if(ans&&cur&&cur.phase==="ask")ans.focus();
   else if(PRACTICE.includes(mode)&&document.activeElement&&document.activeElement!==document.body)document.activeElement.blur();
   if(focusAfter){const el=document.querySelector(focusAfter);if(el)el.focus();focusAfter=null;}
+  paintGoogleButtons();
   document.getElementById("foot").textContent=mode==="add"?"一行一個單字 · Ctrl+Enter 讓 AI 產生 · Tab 切換頁面":mode==="cards"
     ?"Space 翻面 · 1 不會 · 2 模糊 · 3 會 · / 換主題 · Tab 切換頁面"
     :mode==="quiz"?(sess&&!sess.finished?"Enter 送出/下一題 · 1–4 選擇 · Esc 不會 · Tab 切換頁面":"Enter 開始 · [ ] 換題型 · / 換主題 · Tab 切換頁面")
@@ -780,6 +781,7 @@ function chk(on,label,act){return `<button data-nav class="tog${on?" on":""}" da
 function pSettings(){
   const st=S.settings;
   let h=`<h1>設定</h1>`;if(msg)h+=`<p class="acc">> ${esc(msg)}</p>`;
+  h+=acctSection();
   h+=`<hr><h2>遺忘曲線</h2>`;
   h+=`<p class="q">目標記憶率（%）：<input data-nav type="number" min="70" max="97" data-k="target" value="${Math.round(st.target*100)}">　成長倍率：<input data-nav type="number" step="0.1" min="1.2" max="4" data-k="growth" value="${st.growth}">　最長間隔（天）：<input data-nav type="number" min="7" data-k="maxIv" value="${st.maxIv}"></p>`;
   h+=`<div class="formula">記憶率 R = 0.9<sup>t / S</sup>　（t＝距上次複習天數，S＝穩定度）<br>下次複習：記憶率掉到目標值的那一天 → 間隔 = S × ln(目標) / ln(0.9)<br>按「會」：S × 成長倍率 × 易度/2.5 × (1 + 快忘程度)；「模糊」：S × 1.2；「不會」：S × 0.3，隔天再出<br><span class="mute">目標記憶率調高 → 複習更頻繁、更不容易忘；調低 → 複習量變少。</span></div>`;
@@ -802,7 +804,7 @@ function pSettings(){
   h+=keyGuide(ai.provider,!ai.key);
   }
   h+=`<h2>共有詞庫</h2><p class="q mute">${apiOn()?`已連上共有詞庫伺服器（${Object.keys(shared.words).length} 個社群單字）。`:CL()?"在 claude.ai 上開啟時無法使用共有詞庫。":"這個網站還沒設定共有詞庫伺服器（站長要在 config.js 填入網址）。"}</p>`;
-  if(apiOn())h+=`<p class="q">站長金鑰：<input data-nav id="admkey" type="password" class="wide" value="${esc(adminKey())}" placeholder="只有站長需要填" autocomplete="off"> <button data-nav data-act="adm-verify">驗證並開啟站長管理</button> <span class="mute">填了之後「詞庫 → 共有詞庫」會出現管理功能</span></p>`;
+  if(apiOn())h+=`<details class="guide"><summary>用站長金鑰管理（不用 Google 登入時）</summary><p class="q">站長金鑰：<input data-nav id="admkey" type="password" class="wide" value="${esc(adminKey())}" placeholder="只有站長需要填" autocomplete="off"> <button data-nav data-act="adm-verify">驗證並開啟站長管理</button> <span class="mute">填了之後「詞庫 → 共有詞庫」會出現管理功能</span></p></details>`;
   h+=`<h2>資料</h2><p class="q mute">${cloudState==="on"?"進度會自動同步到你的 Claude 帳號，換電腦打開這個網頁也看得到。":cloudState==="readonly"?"這個網頁目前不能幫你存到雲端，進度只存在這台裝置的瀏覽器，記得定期匯出備份。":"進度存在這台裝置的瀏覽器，換電腦或清除瀏覽資料會不見，記得定期匯出備份。"}</p>`;
   h+=`<p><button data-nav data-act="export">匯出 JSON</button>　<button data-nav data-act="import">匯入 JSON</button>　<button data-nav data-act="exportwords">匯出詞庫（含審核狀態）</button></p>`;
   h+=`<h2>資料來源</h2><p class="q mute">CEFR 單字等級：A1～B2 取自 CEFR-J Wordlist v1.5（Tono Laboratory, TUFS）；C1～C2 取自 Octanove Vocabulary Profile C1/C2 v1.0（Octanove Labs，CC BY-SA 4.0）。</p>`;
@@ -820,9 +822,9 @@ function saveShared(){try{localStorage.setItem(SHK,JSON.stringify(shared));}catc
 function myUid(){let u="anon";try{u=localStorage.getItem("volcab.uid");if(!u){u=Array.from(crypto.getRandomValues(new Uint8Array(12)),b=>b.toString(16).padStart(2,"0")).join("");localStorage.setItem("volcab.uid",u);}}catch(e){}return u;}
 function adminKey(){try{return localStorage.getItem("volcab.admin")||"";}catch(e){return "";}}
 async function api(path,opt){
-  opt=opt||{};const h={"Content-Type":"application/json"};if(opt.admin)h.Authorization="Bearer "+adminKey();
+  opt=opt||{};const h={"Content-Type":"application/json"};const tk=sessTok();if(opt.admin)h.Authorization="Bearer "+(tk&&isAdminUser()?tk:adminKey());else if(tk)h.Authorization="Bearer "+tk;
   let r;try{r=await fetch(API+path,{method:opt.method||"GET",headers:h,body:opt.body?JSON.stringify(opt.body):undefined});}catch(e){throw new Error("連不上共有詞庫伺服器");}
-  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||("伺服器錯誤 "+r.status));return j;
+  const j=await r.json().catch(()=>({}));if(!r.ok){const e=new Error(j.error||("伺服器錯誤 "+r.status));e.status=r.status;throw e;}return j;
 }
 async function syncShared(){
   if(!apiOn()||shSync==="busy")return;shSync="busy";
@@ -853,6 +855,118 @@ async function shareRecs(list){
 }
 const SHL={sending:"分享中…",approved:"已在共有詞庫",exists:"共有詞庫已有",pending:"等待審核",rejected:"未通過審核",error:"分享失敗",off:"只存在我的詞庫"};
 
+/* ---------- Google 帳號登入與跨裝置同步 ---------- */
+const SESSK="volcab.session";
+let session=null,gClient="",gReady=false,gLoading=false,acctState="off",acctLast=0,acctTimer=null,acctBusy=false,delAcctArm=false;
+function loadSession(){try{const s=JSON.parse(localStorage.getItem(SESSK)||"null");if(s&&s.token&&(!s.exp||s.exp>Date.now()))session=s;}catch(e){}}
+function saveSession(){try{if(session)localStorage.setItem(SESSK,JSON.stringify(session));else localStorage.removeItem(SESSK);}catch(e){}}
+function sessTok(){return session&&session.token||"";}
+function isAdminUser(){return !!(session&&session.user&&session.user.admin);}
+function adminUI(){return apiOn()&&(!!adminKey()||isAdminUser());}
+async function initGoogle(){
+  if(!apiOn()||gLoading||gReady)return;gLoading=true;
+  try{const c=await api("/api/config");gClient=c.google_client_id||"";}catch(e){gClient="";}
+  if(!gClient){gLoading=false;if(mode==="settings")render();return;}
+  const s=document.createElement("script");s.src="https://accounts.google.com/gsi/client";s.async=true;
+  s.onload=()=>{try{google.accounts.id.initialize({client_id:gClient,callback:onGoogleCred,ux_mode:"popup",auto_select:false,cancel_on_tap_outside:true});gReady=true;}catch(e){}gLoading=false;render();};
+  s.onerror=()=>{gLoading=false;};document.head.appendChild(s);
+}
+function paintGoogleButtons(){
+  if(!gReady||typeof google==="undefined")return;
+  document.querySelectorAll(".gbtn").forEach(el=>{if(el.dataset.done)return;el.dataset.done="1";try{google.accounts.id.renderButton(el,{theme:"outline",size:"large",text:"signin_with",shape:"pill",locale:"zh-TW"});}catch(e){}});
+}
+async function onGoogleCred(resp){
+  try{
+    const j=await api("/api/auth/google",{method:"POST",body:{credential:resp&&resp.credential}});
+    session={token:j.token,user:j.user,exp:j.expires_at};saveSession();
+    toast(`已用 ${j.user.name||j.user.email} 登入`);
+    await acctPull(true);
+    if(isAdminUser())toast("你是站長：「詞庫 → 共有詞庫」可以管理投稿");
+  }catch(e){toast("登入失敗："+e.message);}
+  render();
+}
+async function acctLogout(){
+  try{await api("/api/auth/logout",{method:"POST"});}catch(e){}
+  session=null;saveSession();acctState="off";lib.admin=null;toast("已登出，這台裝置上的進度會保留");render();
+}
+function acctExpired(){session=null;saveSession();acctState="off";toast("登入已過期，請重新用 Google 登入");render();}
+/* 合併兩份進度：每個字取最近一次作答的紀錄，XP／成就／收藏取聯集，設定用較新的那份 */
+function mergeState(a,b){
+  const A=fromData(clone(a)),B=fromData(clone(b));
+  const newer=(B.savedAt||0)>(A.savedAt||0)?B:A,older=newer===A?B:A;
+  const o=fromData(clone(newer));
+  const tomb=Object.assign({},A.tomb,B.tomb);
+  for(const k in A.tomb)tomb[k]=Math.max(A.tomb[k]||0,B.tomb[k]||0);
+  o.tomb=tomb;
+  o.prog={};for(const s of [A,B])for(const w in s.prog){const x=o.prog[w],y=s.prog[w];if(!x||(y.lastAt||0)>(x.lastAt||0)||((y.lastAt||0)===(x.lastAt||0)&&(y.c+y.wr)>(x.c+x.wr)))o.prog[w]=y;}
+  o.log={};for(const s of [A,B])for(const d in s.log){const x=o.log[d]||{},y=s.log[d],m={};for(const k of new Set([...Object.keys(x),...Object.keys(y)]))m[k]=Math.max(+x[k]||0,+y[k]||0);o.log[d]=m;}
+  o.modeStats={};for(const s of [A,B])for(const k in s.modeStats){const x=o.modeStats[k]||{c:0,w:0,slow:0},y=s.modeStats[k];o.modeStats[k]={c:Math.max(x.c,y.c||0),w:Math.max(x.w,y.w||0),slow:Math.max(x.slow,y.slow||0)};}
+  o.xp={total:0,days:{}};for(const s of [A,B])for(const d in s.xp.days)o.xp.days[d]=Math.max(o.xp.days[d]||0,s.xp.days[d]||0);
+  o.xp.total=Math.max(A.xp.total||0,B.xp.total||0,Object.values(o.xp.days).reduce((x,y)=>x+y,0));
+  o.badges={};for(const s of [A,B])for(const k in s.badges)o.badges[k]=!o.badges[k]||s.badges[k]<o.badges[k]?s.badges[k]:o.badges[k];
+  o.best={combo:Math.max(A.best.combo||0,B.best.combo||0)};
+  const lvNewer=[A,B].map(s=>Object.keys(s.lv.hist||{}).sort().pop()||"").reduce((m,d,i)=>d>m.d?{d,i}:m,{d:"",i:newer===A?0:1});
+  o.lv=clone([A,B][lvNewer.i].lv);o.lv.hist=Object.assign({},older.lv.hist,newer.lv.hist);
+  o.reviewed=Object.assign({},older.reviewed,newer.reviewed);
+  o.overrides=Object.assign({},older.overrides,newer.overrides);
+  o.hidden=Object.assign({},A.hidden,B.hidden);
+  o.collect={};for(const s of [A,B])for(const w in s.collect)o.collect[w]=Math.max(o.collect[w]||0,+s.collect[w]||1);
+  for(const w in o.collect)if((tomb["c:"+w]||0)>o.collect[w])delete o.collect[w];
+  const cm={};for(const s of [older,newer])for(const r of s.custom||[])cm[r.w]=Object.assign({},cm[r.w]||{},r);
+  o.custom=Object.values(cm).filter(r=>!(tomb["w:"+r.w]&&tomb["w:"+r.w]>(r.addedTs||0)));
+  o.savedAt=Math.max(A.savedAt||0,B.savedAt||0);
+  return o;
+}
+async function acctPull(first){
+  if(!session||!apiOn()||acctBusy)return;acctBusy=true;acctState="syncing";
+  try{
+    const j=await api("/api/sync");
+    if(j.user){session.user=j.user;saveSession();}
+    if(j.data){
+      let remote=null;try{remote=JSON.parse(j.data);}catch(e){}
+      if(remote){const merged=mergeState(S,remote);S=merged;bump();cur=null;try{localStorage.setItem(KEY,JSON.stringify(S));}catch(e){}
+        if(JSON.stringify(merged)!==j.data)acctPush(true);}
+    }else acctPush(true);
+    acctState="ok";acctLast=Date.now();
+    if(first&&j.data)toast("已把雲端進度和這台裝置的進度合併");
+  }catch(e){if(e.status===401)acctExpired();else acctState="error";}
+  acctBusy=false;render();
+}
+function acctPush(now){
+  if(!session||!apiOn())return;clearTimeout(acctTimer);
+  const go=async()=>{
+    if(!session)return;acctState="syncing";
+    try{await api("/api/sync",{method:"PUT",body:{data:JSON.stringify(S)}});acctState="ok";acctLast=Date.now();}
+    catch(e){if(e.status===401)acctExpired();else acctState="error";}
+    if(mode==="settings")render();else{const c=document.getElementById("acctchip");if(c)c.outerHTML=acctChip();}
+  };
+  if(now)go();else acctTimer=setTimeout(go,2000);
+}
+function acctChip(){
+  if(!apiOn())return "";
+  if(!session)return gClient?`<button class="achip" id="acctchip" data-mode="settings" title="用 Google 登入後，進度會跨裝置同步">登入同步</button>`:"";
+  const t=acctState==="syncing"?"同步中…":acctState==="error"?"同步失敗":"已同步";
+  return `<button class="achip ${acctState==="error"?"bad":"ok"}" id="acctchip" data-mode="settings" title="${esc(session.user.email||"")}">☁ ${t}</button>`;
+}
+function acctSection(){
+  let h=`<h2>帳號與跨裝置同步</h2>`;
+  if(CL())return h+`<p class="q mute">在 claude.ai 上開啟時，進度會自動同步到你的 Claude 帳號。</p>`;
+  if(!apiOn())return h+`<p class="q mute">這個網站還沒設定共有伺服器，暫時無法登入同步。</p>`;
+  if(session){
+    const u=session.user||{};
+    h+=`<div class="acct"><div><b>${esc(u.name||"已登入")}</b> <span class="mute">${esc(u.email||"")}</span>${u.admin?' <span class="pill ok">站長</span>':""}</div>`;
+    h+=`<p class="q mute">${acctState==="syncing"?"同步中…":acctState==="error"?'<span class="acc">上次同步失敗，會自動再試。</span>':acctLast?"已同步，"+new Date(acctLast).toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit"})+"。":""} 學習進度、我的詞庫、XP 與成就會自動同步到這個帳號，換裝置登入同一個 Google 帳號就能接著背。</p>`;
+    h+=`<p><button data-nav data-act="acct-sync">立即同步</button>　<button data-nav data-act="acct-logout">登出</button>　<button data-nav data-act="acct-delete" class="${delAcctArm?"acc":""}">${delAcctArm?"再按一次：永久刪除雲端進度":"刪除雲端進度"}</button>${u.admin?'　<button data-nav data-act="lib:shared" data-mode="library">開啟站長管理</button>':""}</p></div>`;
+  }else if(gClient){
+    h+=`<p class="q mute">用 Google 帳號登入後，學習進度、我的詞庫、XP 與成就會自動同步，換手機或電腦登入同一個帳號就能接著背。第一次登入時，這台裝置上已有的進度會一起合併上去。</p><div class="gbtn"></div>`;
+    if(!gReady)h+=`<p class="q mute">登入按鈕載入中…</p>`;
+  }else{
+    h+=`<p class="q mute">${gLoading?"載入中…":"站長還沒開啟 Google 登入。"}</p>`;
+  }
+  h+=`<p class="q mute"><a href="privacy.html" target="_blank" rel="noopener">隱私權政策</a></p>`;
+  return h;
+}
+
 /* ---------- 詞庫頁：我的／共有／待審核 ---------- */
 let lib={tab:"mine",q:"",lv:"all",n:80,reporting:null,admin:null};
 function libRows(){
@@ -867,7 +981,7 @@ function libRows(){
 }
 function libList(){
   const xs=libRows();if(!xs.length)return `<p class="mute libempty">${lib.tab==="mine"?"你的詞庫還沒有字。到「新增」加入自己的單字，或在「共有詞庫」按「收藏」。":"沒有符合的單字。"}</p>`;
-  const adm=!!adminKey()&&apiOn();
+  const adm=adminUI();
   let h=xs.slice(0,lib.n).map(w=>{
     const tag=w.src==="mine"?`<span class="stag mine">我新增的</span>`:w.src==="shared"?`<span class="stag">社群</span>`:`<span class="stag">內建</span>`;
     const sh=w.src==="mine"&&apiOn()?`<span class="stag ${w.share&&w.share.st==="approved"?"ok":w.share&&(w.share.st==="rejected"||w.share.st==="error")?"bad":""}" title="${esc(w.share&&w.share.reason||"")}">${SHL[(w.share&&w.share.st)||"off"]}${w.share&&w.share.reason&&w.share.st!=="approved"?"："+esc(w.share.reason):""}</span>`:"";
@@ -897,7 +1011,7 @@ function pLibrary(){
   }else{
     h+=`<p class="mute">你自己新增的字，以及從共有詞庫收藏的字。${apiOn()?"新增的字會自動送去 AI 審核，通過後大家都能用。":""}</p>`;
   }
-  if(lib.tab==="shared"&&adminKey()&&apiOn())h+=adminPanel();
+  if(lib.tab==="shared"&&adminUI())h+=adminPanel();
   h+=`<div class="libbar"><input id="libq" type="text" placeholder="搜尋英文或中文" value="${esc(lib.q)}" autocomplete="off"><span class="seg">${["all",...LVS,"none"].map(l=>`<button tabindex="-1" class="tog${lib.lv===l?" on":""}" data-act="liblv:${l}">${l==="all"?"全部":l==="none"?"未分級":l}</button>`).join("")}</span></div>`;
   h+=`<div id="liblist">${libList()}</div>`;
   return h;
@@ -1037,7 +1151,7 @@ function readDraft(i){
 }
 function commitDraft(i){
   const o=readDraft(i);
-  const rec={w:o.w,pos:o.pos||"n",m:o.m,alt:o.alt||"",syn:o.syn||[],der:o.der||[],col:o.col||[],ex:o.ex||"",topic:o.topic||"自訂",cefr:o.cefr||lookupLv(o.w)||"",grp:"",custom:true,src:"mine",addedAt:today()};
+  const rec={addedTs:Date.now(),w:o.w,pos:o.pos||"n",m:o.m,alt:o.alt||"",syn:o.syn||[],der:o.der||[],col:o.col||[],ex:o.ex||"",topic:o.topic||"自訂",cefr:o.cefr||lookupLv(o.w)||"",grp:"",custom:true,src:"mine",addedAt:today()};
   if(apiOn())rec.share={st:"sending"};
   S.custom.push(rec);S.reviewed[rec.w]=false;return rec.w;
 }
@@ -1112,7 +1226,7 @@ function doImport(file){
 document.addEventListener("click",e=>{
   const fl=e.target.closest('.scene[data-act="flip"]');if(fl&&!e.target.closest("button")){flip();return;}
   const b=e.target.closest("button");if(!b)return;
-  if(b.dataset.mode){setMode(b.dataset.mode);return;}
+  if(b.dataset.mode){if(b.dataset.act&&b.dataset.act.startsWith("lib:"))lib.tab=b.dataset.act.slice(4);setMode(b.dataset.mode);return;}
   if(b.dataset.act!=="delword")delArm=null;
   if(b.dataset.opt!==undefined){submit(+b.dataset.opt);return;}
   if(b.dataset.grade){grade(+b.dataset.grade);return;}
@@ -1139,8 +1253,11 @@ document.addEventListener("click",e=>{
   if(a.startsWith("ai:")){setAi({provider:a.slice(3)});focusAfter=`[data-act="${a}"]`;render();return;}
   if(a==="aiclear"){setAi({key:""});msg="金鑰已清除";render();return;}
   if(a==="aitest"){msg="測試中…";render();callAI('Reply with exactly: OK').then(r=>{msg="連線成功："+r.trim().slice(0,40);render();}).catch(err=>{msg=err.message;render();});return;}
-  if(a==="delword"){if(delArm!==w){delArm=w;render();return;}S.custom=S.custom.filter(x=>x.w!==w);delete S.prog[w];delete S.overrides[w];delete S.reviewed[w];again=again.filter(x=>x!==w);delArm=null;save();msg=w+" 已刪除";render();return;}
+  if(a==="delword"){if(delArm!==w){delArm=w;render();return;}S.tomb["w:"+w]=Date.now();S.custom=S.custom.filter(x=>x.w!==w);delete S.prog[w];delete S.overrides[w];delete S.reviewed[w];again=again.filter(x=>x!==w);delArm=null;save();msg=w+" 已刪除";render();return;}
   if(a==="start-round"||a==="again-round"){startSession();return;}
+  if(a==="acct-sync"){acctPull(false);return;}
+  if(a==="acct-logout"){acctLogout();return;}
+  if(a==="acct-delete"){if(!delAcctArm){delAcctArm=true;render();return;}delAcctArm=false;api("/api/account/delete",{method:"POST"}).then(()=>{session=null;saveSession();acctState="off";toast("雲端進度已刪除，這台裝置上的進度仍保留");render();}).catch(e=>toast(e.message));return;}
   if(a==="pt-start"){startPlacement();return;}
   if(a==="pt-yes"){ptAnswer(true);return;}
   if(a==="pt-no"){ptAnswer(false);return;}
@@ -1157,8 +1274,8 @@ document.addEventListener("click",e=>{
   if(a.startsWith("liblv:")){lib.lv=a.slice(6);lib.n=80;render();return;}
   if(a==="lib-more"){lib.n+=200;render();return;}
   if(a==="sync"){syncShared();render();return;}
-  if(a==="collect"){S.collect[w]=1;save();toast(`已收藏「${w}」到我的詞庫`);render();return;}
-  if(a==="uncollect"){delete S.collect[w];save();render();return;}
+  if(a==="collect"){S.collect[w]=Date.now();delete S.tomb["c:"+w];save();toast(`已收藏「${w}」到我的詞庫`);render();return;}
+  if(a==="uncollect"){delete S.collect[w];S.tomb["c:"+w]=Date.now();save();render();return;}
   if(a==="report"){lib.reporting=w;render();return;}
   if(a==="report-cancel"){lib.reporting=null;render();return;}
   if(a==="report-go"){const r=b.dataset.r;S.hidden[w]=1;delete S.collect[w];lib.reporting=null;save();toast(`已回報「${w}」，這個字不會再出現在你的題目裡`);
@@ -1266,9 +1383,10 @@ document.addEventListener("keydown",e=>{
 });
 
 /* 測試用介面 */
-window.WB={get sess(){return sess;},get pt(){return pt;},get lib(){return lib;},myLevel,lvOf,pool,levelOf,streak,parseAI,normAI,buildPrompt,get drafts(){return drafts;},grade,flip,get again(){return again;},get S(){return S;},applySRS,todayQueue,today,addDays,diffDays,ivFromS,nextS,retention,curR,words,makeQ,distractors,setOffset:n=>{S.settings.offset=n;save();},render,setMode,submit,get cur(){return cur;}};
+window.WB={mergeState,get session(){return session;},acctPull,get sess(){return sess;},get pt(){return pt;},get lib(){return lib;},myLevel,lvOf,pool,levelOf,streak,parseAI,normAI,buildPrompt,get drafts(){return drafts;},grade,flip,get again(){return again;},get S(){return S;},applySRS,todayQueue,today,addDays,diffDays,ivFromS,nextS,retention,curR,words,makeQ,distractors,setOffset:n=>{S.settings.offset=n;save();},render,setMode,submit,get cur(){return cur;}};
 load();render();
-loadShared();bump();initCloud();initSample();syncShared();setInterval(()=>{if(!document.hidden)syncShared();},10*60*1000);
+loadShared();loadSession();bump();initCloud();initSample();syncShared();initGoogle();if(session)acctPull(false);
+document.addEventListener("visibilitychange",()=>{if(!document.hidden&&session&&Date.now()-acctLast>60000)acctPull(false);});setInterval(()=>{if(!document.hidden)syncShared();},10*60*1000);
 if("serviceWorker" in navigator&&!CL()&&/github\.io$|^localhost$|^127\./.test(location.hostname)){const had=!!navigator.serviceWorker.controller;let reloaded=false;
   navigator.serviceWorker.register("sw.js",{updateViaCache:"none"}).then(r=>r.update()).catch(()=>{});
   navigator.serviceWorker.addEventListener("controllerchange",()=>{if(had&&!reloaded){reloaded=true;location.reload();}});}

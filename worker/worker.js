@@ -4,11 +4,14 @@
    需要的設定（Cloudflare 後台 → 這個 Worker → Settings）：
    - D1 資料庫綁定，變數名稱：DB
    - 機密變數（Secret）：
-       GEMINI_API_KEY  你的 Gemini API 金鑰（AI 審核用）
-       ADMIN_TOKEN     站長金鑰，自己想一串 16 字以上的亂碼
+       GEMINI_API_KEY   你的 Gemini API 金鑰（AI 審核用）
+       ADMIN_TOKEN      （可省略）站長金鑰，16 字以上；用 Google 登入當站長就不需要
    - 一般變數（Variable）：
-       ALLOWED_ORIGINS 允許呼叫的網站，例如 https://rjian-collab.github.io
-       GEMINI_MODEL    （可省略）預設 gemini-3.5-flash
+       ALLOWED_ORIGINS  允許呼叫的網站，例如 https://rjian-collab.github.io
+       GOOGLE_CLIENT_ID Google 登入用的用戶端 ID（xxxx.apps.googleusercontent.com）
+       ADMIN_EMAILS     站長的 Gmail，多個用逗號分開
+       GEMINI_MODEL     （可省略）預設 gemini-3.5-flash
+   需要的資料表會在第一次使用時自動建立。
 
    API：
    GET  /api/health                 檢查是否正常
@@ -17,6 +20,12 @@
    POST /api/report                 回報單字（3 人回報自動隱藏）
    GET  /api/admin/queue            站長：被隱藏／待審核／被拒絕的清單
    POST /api/admin/word             站長：刪除、恢復、強制通過、忽略
+   GET  /api/config                 前端設定（Google 用戶端 ID）
+   POST /api/auth/google            用 Google 登入，換取登入憑證
+   GET  /api/me                     目前登入的使用者
+   POST /api/auth/logout            登出
+   GET  /api/sync / PUT /api/sync   下載／上傳學習進度
+   POST /api/account/delete         刪除雲端上的個人資料
    ========================================================= */
 
 const LVS = ["A1", "A2", "B1", "B2", "C1", "C2"];
@@ -24,6 +33,8 @@ const POS = ["n", "v", "adj", "adv", "ph", "prefix"];
 const LIMITS = { submitPerUser: 30, submitPerIp: 100, reportPerUser: 50 };
 const HIDE_AFTER_REPORTS = 3;
 const PAGE = 1000;
+const SESSION_DAYS = 60;
+const MAX_STATE = 900000; // 學習進度最大約 900 KB
 const GEMINI_FALLBACK = ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"];
 
 export default {
@@ -33,6 +44,7 @@ export default {
     try {
       const url = new URL(request.url);
       const p = url.pathname.replace(/\/+$/, "");
+      await ensureTables(env);
       let res;
       if (p === "/api/health") res = json({ ok: true, time: Date.now() });
       else if (p === "/api/status") res = json({
@@ -42,8 +54,17 @@ export default {
         gemini_model: env.GEMINI_MODEL || "gemini-3.5-flash（預設）",
         admin_token: adminToken(env) ? (adminToken(env).length >= 16 ? "已設定" : "太短，至少 16 字") : "沒有讀到",
         allowed_origins: String(env.ALLOWED_ORIGINS || "（沒有設定）"),
-        version: "2026-10-24b",
+        google_client_id: env.GOOGLE_CLIENT_ID ? "已設定" : "沒有讀到",
+        admin_emails: adminEmails(env).length ? `已設定 ${adminEmails(env).length} 個` : "沒有讀到",
+        version: "2026-10-24c",
       });
+      else if (p === "/api/config") res = json({ google_client_id: String(env.GOOGLE_CLIENT_ID || "").trim() });
+      else if (p === "/api/auth/google" && request.method === "POST") res = await authGoogle(request, env);
+      else if (p === "/api/me" && request.method === "GET") res = await me(request, env);
+      else if (p === "/api/auth/logout" && request.method === "POST") res = await logout(request, env);
+      else if (p === "/api/sync" && request.method === "GET") res = await syncGet(request, env);
+      else if (p === "/api/sync" && request.method === "PUT") res = await syncPut(request, env);
+      else if (p === "/api/account/delete" && request.method === "POST") res = await accountDelete(request, env);
       else if (p === "/api/words" && request.method === "GET") res = await listWords(url, env);
       else if (p === "/api/words" && request.method === "POST") res = await submitWord(request, env);
       else if (p === "/api/report" && request.method === "POST") res = await report(request, env);
@@ -81,7 +102,7 @@ function corsHeaders(request, env) {
   const origin = request.headers.get("Origin") || "";
   const allowed = String(env.ALLOWED_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean);
   const ok = allowed.includes("*") ? "*" : allowed.includes(origin) || /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ? origin : "";
-  const h = { "Access-Control-Allow-Methods": "GET, POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization", "Access-Control-Max-Age": "86400", Vary: "Origin" };
+  const h = { "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS", "Access-Control-Allow-Headers": "Content-Type, Authorization", "Access-Control-Max-Age": "86400", Vary: "Origin" };
   if (ok) h["Access-Control-Allow-Origin"] = ok;
   return h;
 }
@@ -110,9 +131,17 @@ function isAdmin(request, env) {
   const h = (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim();
   return t.length >= 16 && h === t;
 }
-function requireAdmin(request, env) {
+function adminEmails(env) { return String(env.ADMIN_EMAILS || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean); }
+async function requireAdmin(request, env) {
+  // 方法一：用 Google 登入，而且 Email 在 ADMIN_EMAILS 裡
+  const s = await sessionOf(request, env);
+  if (s) {
+    if (s.email && adminEmails(env).includes(s.email.toLowerCase())) return;
+    if (!adminToken(env)) throw fail(adminEmails(env).length ? "這個 Google 帳號不是站長（不在 ADMIN_EMAILS 裡）" : "Worker 沒有設定 ADMIN_EMAILS（站長的 Gmail）", 403);
+  }
+  // 方法二：站長金鑰
   const t = adminToken(env);
-  if (!t) throw fail("Worker 沒有讀到 ADMIN_TOKEN：檢查 Cloudflare 變數名稱是否拼對（全大寫），並按 Deploy", 401);
+  if (!t) throw fail("請用站長的 Google 帳號登入（Cloudflare 要設定 ADMIN_EMAILS）", 401);
   if (t.length < 16) throw fail(`Cloudflare 裡的 ADMIN_TOKEN 只有 ${t.length} 個字，至少要 16 個字`, 401);
   if (!isAdmin(request, env)) throw fail("站長金鑰不正確", 401);
 }
@@ -225,7 +254,8 @@ async function listWords(url, env) {
 
 async function submitWord(request, env) {
   const body = await readJson(request);
-  const uid = str(body.uid, 40) || "anon";
+  const sess = await sessionOf(request, env);
+  const uid = sess ? sess.uid : (str(body.uid, 40) || "anon");
   const word = cleanWord(body.word);
   const existing = await env.DB.prepare("SELECT status, data FROM words WHERE w = ?").bind(word.w).first();
   if (existing && existing.status !== "deleted") {
@@ -268,7 +298,7 @@ async function report(request, env) {
 }
 
 async function adminQueue(request, env) {
-  requireAdmin(request, env);
+  await requireAdmin(request, env);
   const pick = r => { const d = JSON.parse(r.data); return { w: r.w, pos: d.pos, m: d.m, note: r.note || "", id: r.id }; };
   const hidden = (await env.DB.prepare("SELECT w, data, note FROM words WHERE status = 'hidden' ORDER BY updated_at DESC LIMIT 200").all()).results.map(pick);
   const pending = (await env.DB.prepare("SELECT w, data, note FROM words WHERE status = 'pending' ORDER BY created_at LIMIT 200").all()).results.map(pick);
@@ -277,7 +307,7 @@ async function adminQueue(request, env) {
 }
 
 async function adminWord(request, env) {
-  requireAdmin(request, env);
+  await requireAdmin(request, env);
   const body = await readJson(request);
   const w = str(body.w, 60).toLowerCase();
   const ts = nowTs();
@@ -311,5 +341,122 @@ async function adminWord(request, env) {
     default:
       throw fail("不支援的動作");
   }
+  return json({ ok: true });
+}
+
+/* ---------- 資料表（第一次使用時自動建立） ---------- */
+let tablesReady = false;
+async function ensureTables(env) {
+  if (tablesReady || !env.DB) return;
+  const sql = [
+    "CREATE TABLE IF NOT EXISTS words (w TEXT PRIMARY KEY, data TEXT NOT NULL, cefr TEXT, status TEXT NOT NULL DEFAULT 'approved', reports INTEGER NOT NULL DEFAULT 0, created_by TEXT, created_at INTEGER, updated_at INTEGER NOT NULL, note TEXT)",
+    "CREATE INDEX IF NOT EXISTS idx_words_updated ON words(updated_at)",
+    "CREATE TABLE IF NOT EXISTS reports (w TEXT NOT NULL, uid TEXT NOT NULL, reason TEXT, created_at INTEGER, PRIMARY KEY (w, uid))",
+    "CREATE TABLE IF NOT EXISTS rejected (id INTEGER PRIMARY KEY AUTOINCREMENT, w TEXT NOT NULL, data TEXT NOT NULL, reason TEXT, uid TEXT, created_at INTEGER)",
+    "CREATE TABLE IF NOT EXISTS quota (k TEXT PRIMARY KEY, day TEXT NOT NULL, n INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, uid TEXT NOT NULL, email TEXT, name TEXT, created_at INTEGER, expires_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS user_state (uid TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)",
+  ];
+  for (const s of sql) await env.DB.prepare(s).run();
+  tablesReady = true;
+}
+
+/* ---------- Google 登入 ---------- */
+let jwks = { keys: null, until: 0 };
+async function googleKeys(force) {
+  if (!force && jwks.keys && Date.now() < jwks.until) return jwks.keys;
+  const r = await fetch("https://www.googleapis.com/oauth2/v3/certs");
+  if (!r.ok) throw fail("暫時無法連到 Google，請稍後再試", 503);
+  const j = await r.json();
+  const m = (r.headers.get("cache-control") || "").match(/max-age=(\d+)/);
+  jwks = { keys: j.keys || [], until: Date.now() + (m ? Number(m[1]) * 1000 : 3600000) };
+  return jwks.keys;
+}
+function b64url(s) {
+  s = s.replace(/-/g, "+").replace(/_/g, "/");
+  while (s.length % 4) s += "=";
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+async function verifyGoogleToken(cred, clientId) {
+  const parts = String(cred || "").split(".");
+  if (parts.length !== 3) throw fail("Google 登入憑證格式錯誤", 401);
+  const [h, p, sig] = parts;
+  let header, payload;
+  try {
+    header = JSON.parse(new TextDecoder().decode(b64url(h)));
+    payload = JSON.parse(new TextDecoder().decode(b64url(p)));
+  } catch { throw fail("Google 登入憑證格式錯誤", 401); }
+  if (header.alg !== "RS256") throw fail("Google 登入憑證格式錯誤", 401);
+  let jwk = (await googleKeys(false)).find(k => k.kid === header.kid);
+  if (!jwk) jwk = (await googleKeys(true)).find(k => k.kid === header.kid);
+  if (!jwk) throw fail("無法驗證 Google 登入憑證", 401);
+  const key = await crypto.subtle.importKey("jwk", { kty: jwk.kty, n: jwk.n, e: jwk.e, alg: "RS256", ext: true }, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["verify"]);
+  const ok = await crypto.subtle.verify("RSASSA-PKCS1-v1_5", key, b64url(sig), new TextEncoder().encode(h + "." + p));
+  if (!ok) throw fail("Google 登入憑證無效", 401);
+  if (!["accounts.google.com", "https://accounts.google.com"].includes(payload.iss)) throw fail("Google 登入憑證無效", 401);
+  if (payload.aud !== clientId) throw fail("Google 登入憑證不是發給這個網站的（檢查 GOOGLE_CLIENT_ID）", 401);
+  if (!payload.exp || payload.exp * 1000 < Date.now() - 60000) throw fail("Google 登入憑證已過期，請重新登入", 401);
+  if (!payload.sub) throw fail("Google 登入憑證無效", 401);
+  return payload;
+}
+function randomToken() { return Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, "0")).join(""); }
+function bearer(request) { return (request.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "").trim(); }
+async function sessionOf(request, env) {
+  const tok = bearer(request);
+  if (!tok || tok.length !== 64) return null;
+  const s = await env.DB.prepare("SELECT uid, email, name, expires_at FROM sessions WHERE token = ?").bind(tok).first();
+  if (!s || s.expires_at < Date.now()) return null;
+  return s;
+}
+async function requireSession(request, env) {
+  const s = await sessionOf(request, env);
+  if (!s) throw fail("登入已過期，請重新登入", 401);
+  return s;
+}
+function userOut(s, env) {
+  return { name: s.name || "", email: s.email || "", admin: !!(s.email && adminEmails(env).includes(String(s.email).toLowerCase())) };
+}
+async function authGoogle(request, env) {
+  const clientId = String(env.GOOGLE_CLIENT_ID || "").trim();
+  if (!clientId) throw fail("站長還沒設定 Google 登入（Cloudflare 缺少 GOOGLE_CLIENT_ID）", 503);
+  const body = await readJson(request);
+  const g = await verifyGoogleToken(body.credential, clientId);
+  const email = g.email && g.email_verified !== false ? String(g.email).toLowerCase() : "";
+  const s = { uid: "g:" + g.sub, email, name: str(g.name || g.given_name || "", 60) };
+  const token = randomToken(), now = Date.now();
+  await env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now).run();
+  await env.DB.prepare("INSERT INTO sessions (token, uid, email, name, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)").bind(token, s.uid, s.email, s.name, now, now + SESSION_DAYS * 86400000).run();
+  const st = await env.DB.prepare("SELECT updated_at FROM user_state WHERE uid = ?").bind(s.uid).first();
+  return json({ token, user: userOut(s, env), has_data: !!st, expires_at: now + SESSION_DAYS * 86400000 });
+}
+async function me(request, env) { const s = await requireSession(request, env); return json({ user: userOut(s, env) }); }
+async function logout(request, env) {
+  const tok = bearer(request);
+  if (tok) await env.DB.prepare("DELETE FROM sessions WHERE token = ?").bind(tok).run();
+  return json({ ok: true });
+}
+
+/* ---------- 學習進度同步 ---------- */
+async function syncGet(request, env) {
+  const s = await requireSession(request, env);
+  const r = await env.DB.prepare("SELECT data, updated_at FROM user_state WHERE uid = ?").bind(s.uid).first();
+  return json({ data: r ? r.data : null, updated_at: r ? r.updated_at : 0, user: userOut(s, env) });
+}
+async function syncPut(request, env) {
+  const s = await requireSession(request, env);
+  const text = await request.text();
+  if (text.length > MAX_STATE + 1000) throw fail("學習進度太大，無法同步（請到設定匯出備份）", 413);
+  let body;
+  try { body = JSON.parse(text); } catch { throw fail("資料格式錯誤"); }
+  if (typeof body.data !== "string" || !body.data.startsWith("{")) throw fail("資料格式錯誤");
+  try { JSON.parse(body.data); } catch { throw fail("資料格式錯誤"); }
+  const ts = Date.now();
+  await env.DB.prepare("INSERT INTO user_state (uid, data, updated_at) VALUES (?, ?, ?) ON CONFLICT(uid) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at").bind(s.uid, body.data, ts).run();
+  return json({ ok: true, updated_at: ts });
+}
+async function accountDelete(request, env) {
+  const s = await requireSession(request, env);
+  await env.DB.prepare("DELETE FROM user_state WHERE uid = ?").bind(s.uid).run();
+  await env.DB.prepare("DELETE FROM sessions WHERE uid = ?").bind(s.uid).run();
   return json({ ok: true });
 }
