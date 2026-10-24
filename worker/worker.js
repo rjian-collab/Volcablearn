@@ -64,7 +64,8 @@ export default {
         workers_ai: env.AI ? "已綁定" : "沒有綁定（建議綁定，避免 Gemini 地區限制）",
         ai_model_in_use: (await metaGet(env, "ai_model")) || "（還沒成功審核過）",
         last_ai_error: (await metaGet(env, "ai_error")) || "（沒有）",
-        version: "2026-10-24e",
+        placement: "（看 /api/diag 的 colo 欄位）",
+        version: "2026-10-24f",
       });
       else if (p === "/api/config") res = json({ google_client_id: String(env.GOOGLE_CLIENT_ID || "").trim() });
       else if (p === "/api/auth/google" && request.method === "POST") res = await authGoogle(request, env);
