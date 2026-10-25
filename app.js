@@ -839,7 +839,16 @@ function sharedWords(){
   const have=new Set(WORDS.map(w=>w.w).concat((S.custom||[]).map(w=>w.w)));
   return Object.values(shared.words).filter(x=>x&&x.w&&!have.has(x.w)&&!S.hidden[x.w]).map(x=>({w:x.w,pos:x.pos||"n",m:x.m||"",alt:x.alt||"",syn:x.syn||[],der:x.der||[],col:x.col||[],ex:x.ex||"",topic:x.topic||"社群",grp:"",cefr:x.cefr||"",src:"shared"}));
 }
+/* ---------- 統計（匿名，算人頭不算瀏覽次數） ---------- */
+const twToday=()=>new Date(Date.now()+8*3600000).toISOString().slice(0,10);
+function statHit(){
+  if(!apiOn())return;let last="";try{last=localStorage.getItem("volcab.hit")||"";}catch(e){}
+  const d=twToday();if(last===d)return;
+  api("/api/hit",{method:"POST",body:{vid:myUid()}}).then(()=>{try{localStorage.setItem("volcab.hit",d);}catch(e){}}).catch(()=>{});
+}
+function trackAdds(list){if(apiOn()&&list.length)api("/api/track/add",{method:"POST",body:{vid:myUid(),words:list.slice(0,20)}}).catch(()=>{});}
 async function shareRecs(list){
+  trackAdds(list);
   if(!apiOn()||!list.length)return;
   for(const w of list){
     const rec=(S.custom||[]).find(x=>x.w===w);if(!rec)continue;
@@ -1036,6 +1045,24 @@ function pLibrary(){
   h+=`<div id="liblist">${libList()}</div>`;
   return h;
 }
+function statsPanel(){
+  const st=lib.stats;
+  if(!st&&!lib.statsBusy&&!lib.statsErr){lib.statsBusy=true;api("/api/admin/stats",{admin:true}).then(j=>{lib.stats=j;lib.statsErr="";}).catch(e=>{lib.statsErr=e.message;}).then(()=>{lib.statsBusy=false;render();});}
+  let h=`<details class="admin stats"${lib.statsOpen?" open":""} data-stats><summary>網站統計 ${st?`<span class="pill ok">今天 ${st.visitors.today} 人</span>`:lib.statsErr?`<span class="pill bad">${esc(lib.statsErr)}</span>`:`<span class="mute">載入中…</span>`}</summary>`;
+  h+=`<p><button data-act="stats-load">重新載入</button></p>`;
+  if(!st)return h+`</details>`;
+  const v=st.visitors,w=st.words,tile=(n,l,s)=>`<div class="stile"><b>${n}</b><span>${l}</span>${s?`<small>${s}</small>`:""}</div>`;
+  h+=`<h2>上站人數 <span class="mute">（每個瀏覽器每天算一次）</span></h2><div class="stiles">`+
+    tile(v.today,"今天",`昨天 ${v.yesterday}`)+tile(v.last7,"近 7 天")+tile(v.last30,"近 30 天")+tile(v.total,"累計訪客",`回訪 ${v.returning}`)+tile(v.google_users,"Google 登入同步")+`</div>`;
+  const max=Math.max(1,...st.days.map(d=>d.visitors));
+  h+=`<div class="sbars" role="img" aria-label="近 30 天每日訪客">`+st.days.map(d=>`<div class="sbar" title="${d.day.slice(5)}：${d.visitors} 人（新訪客 ${d.new_visitors}）、新增 ${d.adds} 字"><i style="height:${Math.round(d.visitors/max*100)}%"><em style="height:${d.visitors?Math.round(d.new_visitors/d.visitors*100):0}%"></em></i></div>`).join("")+`</div>`;
+  h+=`<p class="mute sleg"><span class="k1"></span>回訪 <span class="k2"></span>新訪客　${st.days[0].day.slice(5)} ～ ${st.days[29].day.slice(5)}（台灣時間；電腦版把滑鼠移到長條上可看數字）</p>`;
+  h+=`<h2>新增的單字</h2><div class="stiles">`+tile(w.total_adds,"總新增次數",`今天 ${w.today}`)+tile(w.distinct_words,"不同的字")+tile(w.adders,"有加字的人")+
+    tile(w.shared.approved,"共有詞庫",`待審 ${w.shared.pending}・隱藏 ${w.shared.hidden}・拒絕 ${w.shared.rejected}`)+`</div>`;
+  h+=`<h3>最多人加的字</h3>`+(w.top.length?`<p class="schips">${w.top.map(x=>`<span class="stag">${esc(x.w)} <b>${x.n}</b></span>`).join(" ")}</p>`:`<p class="mute">還沒有資料</p>`);
+  h+=`<h3>最近新增</h3>`+(w.recent.length?`<p class="schips">${w.recent.map(x=>`<span class="stag" title="${esc(x.day)}">${esc(x.w)}</span>`).join(" ")}</p>`:`<p class="mute">還沒有資料</p>`);
+  return h+`<p class="mute">只統計開始記錄之後的資料；同一個人用不同裝置或瀏覽器會算成不同人，清除瀏覽資料也會被算成新訪客。</p></details>`;
+}
 function adminPanel(){
   if(!lib.admin&&!lib.adminBusy){lib.adminBusy=true;api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;lib.adminErr="";}).catch(e=>{lib.adminErr=e.message;}).then(()=>{lib.adminBusy=false;render();});}
   const a=lib.admin,n=a?(a.hidden.length+a.pending.length+a.rejected.length):0;
@@ -1048,7 +1075,7 @@ function adminPanel(){
     h+=sec("AI 拒絕的投稿",a.rejected||[],[["adm-force","強制通過"],["adm-dismiss","忽略"]]);
     h+=`<p class="mute">共有詞庫裡的每個字旁邊也會出現「站長刪除」按鈕。</p>`;
   }
-  return h+`</details>`;
+  return statsPanel()+h+`</details>`;
 }
 /* ---------- AI ---------- */
 const AIK="wordbank.ai";
@@ -1301,6 +1328,7 @@ document.addEventListener("click",e=>{
   if(a==="report-go"){const r=b.dataset.r;S.hidden[w]=1;delete S.collect[w];lib.reporting=null;save();toast(`已回報「${w}」，這個字不會再出現在你的題目裡`);
     if(apiOn()&&shared.words[w])api("/api/report",{method:"POST",body:{uid:myUid(),w,reason:r}}).catch(()=>{});render();return;}
   if(a==="reshare"){shareRecs([w]);render();return;}
+  if(a==="stats-load"){lib.statsOpen=true;lib.stats=null;lib.statsErr="";render();return;}
   if(a==="adm-load"){lib.adminOpen=true;api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;lib.adminErr="";render();}).catch(e=>{lib.adminErr=e.message;toast(e.message);render();});return;}
   if(a==="adm-verify"){const el=document.getElementById("admkey");if(el)try{localStorage.setItem("volcab.admin",el.value.trim());}catch(err){}
     api("/api/admin/queue",{admin:true}).then(j=>{lib.admin=j;lib.adminErr="";lib.adminOpen=true;lib.tab="shared";toast("站長金鑰正確，已開啟站長管理");setMode("library");}).catch(e=>{msg=e.message==="站長金鑰不正確"?"站長金鑰不正確：要和 Cloudflare 裡的 ADMIN_TOKEN 一字不差（大小寫也要一樣）。":e.message==="找不到這個 API"?"Worker 的程式還是舊版，請把 GitHub 上最新的 worker/worker.js 貼到 Cloudflare 並 Deploy。":e.message;render();});return;}
@@ -1405,7 +1433,8 @@ document.addEventListener("keydown",e=>{
 /* 測試用介面 */
 window.WB={mergeState,get session(){return session;},acctPull,get sess(){return sess;},get pt(){return pt;},get lib(){return lib;},myLevel,lvOf,pool,levelOf,streak,parseAI,normAI,buildPrompt,get drafts(){return drafts;},grade,flip,get again(){return again;},get S(){return S;},applySRS,todayQueue,today,addDays,diffDays,ivFromS,nextS,retention,curR,words,makeQ,distractors,setOffset:n=>{S.settings.offset=n;save();},render,setMode,submit,get cur(){return cur;}};
 load();render();
-loadShared();loadSession();bump();initCloud();initSample();syncShared();initGoogle();if(apiOn())resumePolls();if(session)acctPull(false);
+loadShared();loadSession();bump();initCloud();initSample();syncShared();initGoogle();if(apiOn())resumePolls();statHit();
+document.addEventListener("toggle",e=>{const t=e.target;if(!t||!t.matches)return;if(t.matches("details[data-stats]"))lib.statsOpen=t.open;else if(t.matches("details.admin"))lib.adminOpen=t.open;},true);if(session)acctPull(false);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&session&&Date.now()-acctLast>60000)acctPull(false);});setInterval(()=>{if(!document.hidden)syncShared();},10*60*1000);
 if("serviceWorker" in navigator&&!CL()&&/github\.io$|^localhost$|^127\./.test(location.hostname)){const had=!!navigator.serviceWorker.controller;let reloaded=false;
   navigator.serviceWorker.register("sw.js",{updateViaCache:"none"}).then(r=>r.update()).catch(()=>{});

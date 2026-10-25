@@ -20,7 +20,7 @@ table{border-collapse:collapse;width:100%;font-size:14px}td,th{border-bottom:1px
 <main>
 <article>
 <h1>Volcablearn 隱私權政策</h1>
-<p class="mute">最後更新：2026 年 10 月 24 日</p>
+<p class="mute">最後更新：2026 年 10 月 25 日</p>
 
 <p>Volcablearn 是一個免費的英文單字閃卡網站（<a href="https://rjian-collab.github.io/Volcablearn/">rjian-collab.github.io/Volcablearn</a>），由個人站長維護。這一頁說明網站會蒐集哪些資料、拿來做什麼，以及你可以怎麼刪除它們。</p>
 
@@ -43,10 +43,14 @@ table{border-collapse:collapse;width:100%;font-size:14px}td,th{border-bottom:1px
 <h2>資料存放與第三方服務</h2>
 <ul>
   <li><strong>Cloudflare</strong>：網站伺服器與資料庫（Cloudflare Workers、D1）存放共有詞庫、登入狀態與同步的學習進度。</li>
-  <li><strong>Google</strong>：提供「用 Google 登入」；投稿到共有詞庫的單字內容會送到 Google Gemini 做 AI 內容審核。</li>
+  <li><strong>Cloudflare Workers AI／Google Gemini</strong>：投稿到共有詞庫的單字內容會送到 AI 做內容審核（優先用 Cloudflare 的 AI，無法使用時改用 Google Gemini）。</li>
+  <li><strong>Google</strong>：提供「用 Google 登入」。</li>
   <li><strong>GitHub Pages</strong>：提供網頁本身。</li>
 </ul>
-<p>網站不放廣告、不做追蹤分析，也不會把你的資料賣給或分享給其他人。伺服器為了限制濫用，會把連線 IP 經過雜湊處理後計算每日使用次數，不會保存原始 IP。</p>
+<h2>匿名使用統計</h2>
+<p>為了知道有多少人在用這個網站，網站會在你的瀏覽器裡產生一組<strong>隨機的匿名編號</strong>（不含姓名、Email 或 IP），每天第一次打開網站時把這組編號送到伺服器，用來計算「每天有幾個人上站」。你新增單字時，也會記錄「這組編號新增了哪個英文單字」，用來統計大家常加哪些字。</p>
+<p>這些統計只有站長看得到，不會用來辨認你是誰，也不使用 Google Analytics 等第三方追蹤服務。清除瀏覽器的網站資料就會換成新的編號。</p>
+<p>網站不放廣告，也不會把你的資料賣給或分享給其他人。伺服器為了限制濫用，會把連線 IP 經過雜湊處理後計算每日使用次數，不會保存原始 IP。</p>
 
 <h2>保存期間與刪除</h2>
 <ul>

@@ -30,11 +30,14 @@
    POST /api/account/delete         刪除雲端上的個人資料
    GET  /api/submission?w=單字       查詢投稿的審核結果
    GET  /api/diag                   測試每個 Gemini 模型能不能用、要多久（每天限 10 次）
+   POST /api/hit                    統計：記錄今天有一位訪客（每個瀏覽器每天只算一次）
+   POST /api/track/add              統計：記錄使用者新增了哪些單字
+   GET  /api/admin/stats            站長：上站人數與新增單字統計
    ========================================================= */
 
 const LVS = ["A1", "A2", "B1", "B2", "C1", "C2"];
 const POS = ["n", "v", "adj", "adv", "ph", "prefix"];
-const LIMITS = { submitPerUser: 30, submitPerIp: 100, reportPerUser: 50 };
+const LIMITS = { submitPerUser: 30, submitPerIp: 100, reportPerUser: 50, hitPerIp: 500, addPerVisitor: 300 };
 const HIDE_AFTER_REPORTS = 3;
 const PAGE = 1000;
 const SESSION_DAYS = 60;
@@ -65,7 +68,7 @@ export default {
         ai_model_in_use: (await metaGet(env, "ai_model")) || "（還沒成功審核過）",
         last_ai_error: (await metaGet(env, "ai_error")) || "（沒有）",
         placement: "（看 /api/diag 的 colo 欄位）",
-        version: "2026-10-24h",
+        version: "2026-10-25a",
       });
       else if (p === "/api/config") res = json({ google_client_id: String(env.GOOGLE_CLIENT_ID || "").trim() });
       else if (p === "/api/auth/google" && request.method === "POST") res = await authGoogle(request, env);
@@ -81,6 +84,9 @@ export default {
       else if (p === "/api/report" && request.method === "POST") res = await report(request, env);
       else if (p === "/api/admin/queue" && request.method === "GET") res = await adminQueue(request, env);
       else if (p === "/api/admin/word" && request.method === "POST") res = await adminWord(request, env);
+      else if (p === "/api/hit" && request.method === "POST") res = await hit(request, env);
+      else if (p === "/api/track/add" && request.method === "POST") res = await trackAdd(request, env);
+      else if (p === "/api/admin/stats" && request.method === "GET") res = await adminStats(request, env);
       else res = json({ error: "找不到這個 API" }, 404);
       for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
       return res;
@@ -463,6 +469,11 @@ async function ensureTables(env) {
     "CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, uid TEXT NOT NULL, email TEXT, name TEXT, created_at INTEGER, expires_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS user_state (uid TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)",
     "CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT)",
+    // 統計：visits 一位訪客一天一列；visitors 記第一次和最後一次來的日子；word_adds 一位訪客加一個字算一次
+    "CREATE TABLE IF NOT EXISTS visits (day TEXT NOT NULL, vid TEXT NOT NULL, PRIMARY KEY (day, vid))",
+    "CREATE TABLE IF NOT EXISTS visitors (vid TEXT PRIMARY KEY, first_day TEXT NOT NULL, last_day TEXT NOT NULL, days INTEGER NOT NULL DEFAULT 1)",
+    "CREATE TABLE IF NOT EXISTS word_adds (w TEXT NOT NULL, vid TEXT NOT NULL, day TEXT NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (w, vid))",
+    "CREATE INDEX IF NOT EXISTS idx_word_adds_day ON word_adds(day)",
   ];
   for (const s of sql) await env.DB.prepare(s).run();
   tablesReady = true;
@@ -570,3 +581,75 @@ async function accountDelete(request, env) {
 
 async function metaGet(env, k) { try { const r = await env.DB.prepare("SELECT v FROM meta WHERE k = ?").bind(k).first(); return r ? r.v : ""; } catch { return ""; } }
 async function metaSet(env, k, v) { try { await env.DB.prepare("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v").bind(k, String(v)).run(); } catch {} }
+
+/* ---------- 統計（算人頭，不算瀏覽次數） ----------
+   每個瀏覽器有一個隨機產生的匿名編號（vid），不含姓名、Email 或 IP。
+   同一個瀏覽器一天只算一次；同一個人用手機和電腦會算成兩個人。 */
+const twDay = (offset = 0) => new Date(Date.now() + 8 * 3600000 - offset * 86400000).toISOString().slice(0, 10); // 台灣日期
+function cleanVid(v) { const s = String(v || ""); return /^[0-9a-f]{16,40}$/.test(s) ? s : ""; }
+async function hit(request, env) {
+  const body = await readJson(request);
+  const vid = cleanVid(body.vid);
+  if (!vid) throw fail("缺少訪客編號");
+  const d = twDay();
+  const r = await env.DB.prepare("INSERT OR IGNORE INTO visits (day, vid) VALUES (?, ?)").bind(d, vid).run();
+  if (r.meta && r.meta.changes) {
+    // 今天第一次來才計數，並限制同一個 IP 一天最多產生 500 個訪客，避免有人亂灌人數
+    const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+    try { await useQuota(env, "hit:" + (await sha(ip + (env.ADMIN_TOKEN || ""))), LIMITS.hitPerIp); }
+    catch (e) { await env.DB.prepare("DELETE FROM visits WHERE day = ? AND vid = ?").bind(d, vid).run(); throw e; }
+    await env.DB.prepare(
+      "INSERT INTO visitors (vid, first_day, last_day, days) VALUES (?, ?, ?, 1) ON CONFLICT(vid) DO UPDATE SET last_day = excluded.last_day, days = visitors.days + 1"
+    ).bind(vid, d, d).run();
+  }
+  return json({ ok: true });
+}
+async function trackAdd(request, env) {
+  const body = await readJson(request);
+  const vid = cleanVid(body.vid);
+  if (!vid) throw fail("缺少訪客編號");
+  const list = (Array.isArray(body.words) ? body.words : []).slice(0, 20)
+    .map(w => str(w, 60).toLowerCase().replace(/\s+/g, " ")).filter(w => /^[a-z][a-z' .-]*$/.test(w));
+  if (!list.length) return json({ ok: true, added: 0 });
+  await useQuota(env, "add:" + vid, LIMITS.addPerVisitor);
+  const d = twDay(), ts = Date.now();
+  await env.DB.batch(list.map(w => env.DB.prepare("INSERT OR IGNORE INTO word_adds (w, vid, day, created_at) VALUES (?, ?, ?, ?)").bind(w, vid, d, ts)));
+  return json({ ok: true, added: list.length });
+}
+async function adminStats(request, env) {
+  await requireAdmin(request, env);
+  const one = async (sql, ...a) => { const r = await env.DB.prepare(sql).bind(...a).first(); return r ? (r.n || 0) : 0; };
+  const all = async (sql, ...a) => (await env.DB.prepare(sql).bind(...a).all()).results;
+  const d0 = twDay(), d1 = twDay(1), d6 = twDay(6), d29 = twDay(29);
+  const daily = await all(
+    "SELECT v.day AS day, COUNT(*) AS visitors, SUM(CASE WHEN p.first_day = v.day THEN 1 ELSE 0 END) AS new_visitors " +
+    "FROM visits v LEFT JOIN visitors p ON p.vid = v.vid WHERE v.day >= ? GROUP BY v.day ORDER BY v.day", d29);
+  const addsDaily = await all("SELECT day, COUNT(*) AS adds FROM word_adds WHERE day >= ? GROUP BY day", d29);
+  const addMap = Object.fromEntries(addsDaily.map(r => [r.day, r.adds]));
+  const visMap = Object.fromEntries(daily.map(r => [r.day, r]));
+  const days = [];
+  for (let i = 29; i >= 0; i--) { const d = twDay(i); const v = visMap[d] || {}; days.push({ day: d, visitors: v.visitors || 0, new_visitors: v.new_visitors || 0, adds: addMap[d] || 0 }); }
+  const status = Object.fromEntries((await all("SELECT status, COUNT(*) AS n FROM words GROUP BY status")).map(r => [r.status, r.n]));
+  return json({
+    generated_at: Date.now(),
+    visitors: {
+      today: await one("SELECT COUNT(*) AS n FROM visits WHERE day = ?", d0),
+      yesterday: await one("SELECT COUNT(*) AS n FROM visits WHERE day = ?", d1),
+      last7: await one("SELECT COUNT(DISTINCT vid) AS n FROM visits WHERE day >= ?", d6),
+      last30: await one("SELECT COUNT(DISTINCT vid) AS n FROM visits WHERE day >= ?", d29),
+      total: await one("SELECT COUNT(*) AS n FROM visitors"),
+      returning: await one("SELECT COUNT(*) AS n FROM visitors WHERE days >= 2"),
+      google_users: await one("SELECT COUNT(*) AS n FROM user_state"),
+    },
+    words: {
+      total_adds: await one("SELECT COUNT(*) AS n FROM word_adds"),
+      distinct_words: await one("SELECT COUNT(DISTINCT w) AS n FROM word_adds"),
+      adders: await one("SELECT COUNT(DISTINCT vid) AS n FROM word_adds"),
+      today: await one("SELECT COUNT(*) AS n FROM word_adds WHERE day = ?", d0),
+      top: await all("SELECT w, COUNT(*) AS n FROM word_adds GROUP BY w ORDER BY n DESC, w LIMIT 20"),
+      recent: await all("SELECT w, day FROM word_adds ORDER BY created_at DESC LIMIT 30"),
+      shared: { approved: status.approved || 0, pending: status.pending || 0, hidden: status.hidden || 0, rejected: await one("SELECT COUNT(*) AS n FROM rejected") },
+    },
+    days,
+  });
+}
